@@ -1,5 +1,7 @@
 import BuildHelper._
 
+val AmmoniteVersion = "2.1.4-8-5d0c097"
+
 inThisBuild(
   List(
     organization := "dev.zio",
@@ -30,8 +32,17 @@ resolvers += Resolver.sonatypeRepo("snapshots")
 libraryDependencies ++= Seq(
   "dev.zio" %% "zio"          % zioVersion,
   "dev.zio" %% "zio-test"     % zioVersion,
-  "dev.zio" %% "zio-test-sbt" % zioVersion
+  "dev.zio" %% "zio-test-sbt" % zioVersion,
+  "com.lihaoyi" %% "ammonite" % AmmoniteVersion % "test" cross CrossVersion.full
 )
+
+// Ammonite repl launch command (Run the test:run task in sbt)
+sourceGenerators in Test += Def.task {
+  val file = (sourceManaged in Test).value / "amm.scala"
+  IO.write(file, """object amm extends App { ammonite.Main().run() }""")
+  Seq(file)
+}.taskValue
+
 
 testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
 
