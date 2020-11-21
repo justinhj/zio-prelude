@@ -1,10 +1,13 @@
 package zio.prelude
 
 import scala.annotation.{ implicitNotFound, tailrec }
+import scala.{ math => sm }
 
-import zio.{ Chunk, NonEmptyChunk }
+import zio.prelude.Equal._
+import zio.prelude.coherent.HashOrd
 import zio.test.TestResult
 import zio.test.laws.{ Lawful, Laws }
+import zio.{ Chunk, NonEmptyChunk }
 
 /**
  * `Ord[A]` provides implicit evidence that values of type `A` have a total
@@ -95,14 +98,11 @@ trait Ord[-A] extends Equal[A] { self =>
   final def reverse: Ord[A] =
     mapOrdering(_.opposite)
 
-  final def toScalaOrdering[A1 <: A]: scala.math.Ordering[A1] =
-    new scala.math.Ordering[A1] {
-      def compare(l: A1, r: A1): Int =
-        self.compare(l, r) match {
-          case Ordering.LessThan    => -1
-          case Ordering.Equals      => 0
-          case Ordering.GreaterThan => 1
-        }
+  override def toScala[A1 <: A]: sm.Ordering[A1] =
+    self.compare(_, _) match {
+      case Ordering.LessThan    => -1
+      case Ordering.Equals      => 0
+      case Ordering.GreaterThan => 1
     }
 }
 
@@ -135,7 +135,7 @@ object Ord extends Lawful[Ord] {
   val antisymmetryLaw1: Laws[Ord] =
     new Laws.Law2[Ord]("antisymmetryLaw1") {
       def apply[A: Ord](a1: A, a2: A): TestResult =
-        ((a1 lessOrEqual a2) && (a2 lessOrEqual a1)) ==> (a1 equal a2)
+        ((a1 lessOrEqual a2) && (a2 lessOrEqual a1)) ==> (a1 isEqualTo a2)
     }
 
   /**
@@ -145,7 +145,7 @@ object Ord extends Lawful[Ord] {
   val antisymmetryLaw2: Laws[Ord] =
     new Laws.Law2[Ord]("antisymmetryLaw2") {
       def apply[A: Ord](a1: A, a2: A): TestResult =
-        ((a1 greaterOrEqual a2) && (a2 greaterOrEqual a1)) ==> (a1 equal a2)
+        ((a1 greaterOrEqual a2) && (a2 greaterOrEqual a1)) ==> (a1 isEqualTo a2)
     }
 
   /**
@@ -179,6 +179,15 @@ object Ord extends Lawful[Ord] {
     }
 
   /**
+   * For all values `a1` and `a2`, iff `a1 =?= a2` is `Ordering.Equals` then `a1 === a2`.
+   */
+  val eqConsistencyLaw: Laws[Ord] =
+    new Laws.Law2[Ord]("eqConsistencyLaw") {
+      def apply[A: Ord](a1: A, a2: A): TestResult =
+        ((a1 =?= a2) isEqualTo Ordering.Equals) <==> ((a1 === a2) isEqualTo true)
+    }
+
+  /**
    * The set of all laws that instances of `Ord` must satify.
    */
   val laws: Laws[Ord] =
@@ -189,25 +198,11 @@ object Ord extends Lawful[Ord] {
       connexityLaw1 +
       connexityLaw2 +
       complementLaw +
+      eqConsistencyLaw +
       Equal.laws
 
-  /**
-   * The `AssociativeBoth` instance for `Ord`.
-   */
-  implicit val OrdAssociativeBoth: AssociativeBoth[Ord] =
-    new AssociativeBoth[Ord] {
-      def both[A, B](fa: => Ord[A], fb: => Ord[B]): Ord[(A, B)] =
-        fa.both(fb)
-    }
-
-  /**
-   * The `AssociativeEither` instance for `Ord`.
-   */
-  implicit val OrdAssociativeEither: AssociativeEither[Ord] =
-    new AssociativeEither[Ord] {
-      def either[A, B](fa: => Ord[A], fb: => Ord[B]): Ord[Either[A, B]] =
-        fa.either(fb)
-    }
+  def fromScala[A](implicit ordering: sm.Ordering[A]): Ord[A] =
+    (l: A, r: A) => Ordering.fromCompare(ordering.compare(l, r))
 
   /**
    * The `Contravariant` instance for `Ord`.
@@ -223,8 +218,8 @@ object Ord extends Lawful[Ord] {
    */
   implicit val OrdIdentityBoth: IdentityBoth[Ord] =
     new IdentityBoth[Ord] {
-      val any: Ord[Any] =
-        AnyOrd
+      val any: Ord[Any]                                         =
+        AnyHashOrd
       def both[A, B](fa: => Ord[A], fb: => Ord[B]): Ord[(A, B)] =
         fa.both(fb)
     }
@@ -236,8 +231,8 @@ object Ord extends Lawful[Ord] {
     new IdentityEither[Ord] {
       def either[A, B](fa: => Ord[A], fb: => Ord[B]): Ord[Either[A, B]] =
         fa.either(fb)
-      val none: Ord[Nothing] =
-        NothingOrd
+      val none: Ord[Nothing]                                            =
+        NothingHashOrd
     }
 
   /**
@@ -252,7 +247,17 @@ object Ord extends Lawful[Ord] {
    * values using the specified function.
    */
   def make[A](ord: (A, A) => Ordering): Ord[A] =
-    (l, r) => if (Equal.refEq(l, r)) Ordering.Equals else ord(l, r)
+    (l, r) => ord(l, r)
+
+  /**
+   * Constructs an instance from an `ord` function and a `equal0` function.
+   * Since this takes a separate `equal0`, short-circuiting the equality check (failing fast) is possible.
+   */
+  def makeFrom[A](ord: (A, A) => Ordering, equal0: Equal[A]): Ord[A] =
+    new Ord[A] {
+      override protected def checkCompare(l: A, r: A): Ordering = ord(l, r)
+      override protected def checkEqual(l: A, r: A): Boolean    = equal0.equal(l, r)
+    }
 
   /**
    * Constructs an `Ord[A]` from a [[scala.math.Ordering]].
@@ -261,50 +266,28 @@ object Ord extends Lawful[Ord] {
     make((a1, a2) => Ordering.fromCompare(ord.compare(a1, a2)))
 
   /**
-   * Ordering for `Any` values. Note that since values of type `Any` contain
-   * no information, all values of type `Any` can be treated as equal to each
-   * other.
-   */
-  val AnyOrd: Ord[Any] =
-    make((_, _) => Ordering.Equals)
-
-  /**
-   * Ordering for `Boolean` values.
-   */
-  implicit val BoolOrd: Ord[Boolean] =
-    default
-
-  /**
-   * Ordering for `Byte` values.
-   */
-  implicit val ByteOrd: Ord[Byte] =
-    default
-
-  /**
-   * Ordering for `Char` values.
-   */
-  implicit val CharOrd: Ord[Char] =
-    default
-
-  /**
    * Derives an `Ord[Chunk[A]]` given an `Ord[A]`.
    */
   implicit def ChunkOrd[A: Ord]: Ord[Chunk[A]] =
-    make { (l, r) =>
-      val j = l.length
-      val k = r.length
+    makeFrom(
+      { (l, r) =>
+        val j = l.length
+        val k = r.length
 
-      def loop(i: Int): Ordering =
-        if (i == j && i == k) Ordering.Equals
-        else if (i == j) Ordering.LessThan
-        else if (i == k) Ordering.GreaterThan
-        else {
-          val compare = Ord[A].compare(l(i), r(i))
-          if (compare.isEqual) loop(i + 1) else compare
-        }
+        @tailrec
+        def loop(i: Int): Ordering =
+          if (i == j && i == k) Ordering.Equals
+          else if (i == j) Ordering.LessThan
+          else if (i == k) Ordering.GreaterThan
+          else {
+            val compare = Ord[A].compare(l(i), r(i))
+            if (compare.isEqual) loop(i + 1) else compare
+          }
 
-      loop(0)
-    }
+        loop(0)
+      },
+      Equal.ChunkEqual
+    )
 
   /**
    * Derives an `Ord[F[A]]` given a `Derive[F, Ord]` and an `Ord[A]`.
@@ -313,30 +296,18 @@ object Ord extends Lawful[Ord] {
     derive.derive(ord)
 
   /**
-   * Ordering for `Double` values. Note that to honor the contract of a total
-   * ordering, `Double.NaN` will be treated as greater than any other number.
-   */
-  implicit val DoubleOrd: Ord[Double] =
-    make((n1, n2) => Ordering.fromCompare(java.lang.Double.compare(n1, n2)))
-
-  /**
    * Derives an `Ord[Either[A, B]]` given an `Ord[A]` and an `Ord[B]`.
    */
   implicit def EitherOrd[A: Ord, B: Ord]: Ord[Either[A, B]] =
-    Ord[A] either Ord[B]
-
-  /**
-   * Ordering for `Float` values. Note that to honor the contract of a total
-   * ordering, `Flat.NaN` will be treated as greater than any other number.
-   */
-  implicit val FloatOrd: Ord[Float] =
-    make((n1, n2) => Ordering.fromCompare(java.lang.Float.compare(n1, n2)))
-
-  /**
-   * Ordering for `Int` values.
-   */
-  implicit val IntOrd: Ord[Int] =
-    default
+    makeFrom(
+      {
+        case (Left(a1), Left(a2))   => a1 =?= a2
+        case (Left(_), Right(_))    => Ordering.LessThan
+        case (Right(_), Left(_))    => Ordering.GreaterThan
+        case (Right(b1), Right(b2)) => b1 =?= b2
+      },
+      Equal.EitherEqual
+    )
 
   /**
    * Derives an `Ord[List[A]]` given an `Ord[A]`.
@@ -344,38 +315,24 @@ object Ord extends Lawful[Ord] {
   implicit def ListOrd[A: Ord]: Ord[List[A]] = {
 
     @tailrec
-    def loop[A: Ord](left: List[A], right: List[A]): Ordering =
+    def loop(left: List[A], right: List[A]): Ordering =
       (left, right) match {
-        case (Nil, Nil) => Ordering.Equals
-        case (Nil, _)   => Ordering.LessThan
-        case (_, Nil)   => Ordering.GreaterThan
+        case (Nil, Nil)               => Ordering.Equals
+        case (Nil, _)                 => Ordering.LessThan
+        case (_, Nil)                 => Ordering.GreaterThan
         case ((h1 :: t1), (h2 :: t2)) =>
           val compare = Ord[A].compare(h1, h2)
           if (compare.isEqual) loop(t1, t2) else compare
       }
 
-    make((l, r) => loop(l, r))
+    makeFrom((l, r) => loop(l, r), Equal.ListEqual)
   }
-
-  /**
-   * Ordering for `Long` values.
-   */
-  implicit val LongOrd: Ord[Long] =
-    default
 
   /**
    * Derives an `Ord[NonEmptyChunk[A]]` given an `Ord[A]`.
    */
   implicit def NonEmptyChunkOrd[A: Ord]: Ord[NonEmptyChunk[A]] =
     Ord[Chunk[A]].contramap(_.toChunk)
-
-  /**
-   * Ordering for `Nothing` values. Note that since there are not values of
-   * type `Nothing` the `ord` method of this instance can never be called
-   * but it can be useful in deriving instances for more complex types.
-   */
-  implicit val NothingOrd: Ord[Nothing] =
-    make[Nothing]((l: Nothing, _: Nothing) => l)
 
   /**
    * Derives an `Ord[Option[A]]` given an `Ord[A]`. `None` will be treated as
@@ -388,65 +345,76 @@ object Ord extends Lawful[Ord] {
     }
 
   /**
-   * Ordering for `String` values.
-   */
-  implicit val StringOrd: Ord[String] =
-    default
-
-  /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
    * the product type.
    */
   implicit def Tuple2Ord[A: Ord, B: Ord]: Ord[(A, B)] =
-    Ord[A] both Ord[B]
+    makeFrom(
+      { case ((a1, b1), (a2, b2)) =>
+        (a1 =?= a2) <> (b1 =?= b2)
+      },
+      Equal.Tuple2Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
    * the product type.
    */
   implicit def Tuple3Ord[A: Ord, B: Ord, C: Ord]: Ord[(A, B, C)] =
-    make {
-      case ((a1, b1, c1), (a2, b2, c2)) => (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2)
-    }
+    makeFrom(
+      { case ((a1, b1, c1), (a2, b2, c2)) =>
+        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2)
+      },
+      Equal.Tuple3Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
    * the product type.
    */
   implicit def Tuple4Ord[A: Ord, B: Ord, C: Ord, D: Ord]: Ord[(A, B, C, D)] =
-    make {
-      case ((a1, b1, c1, d1), (a2, b2, c2, d2)) => (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2)
-    }
+    makeFrom(
+      { case ((a1, b1, c1, d1), (a2, b2, c2, d2)) =>
+        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2)
+      },
+      Equal.Tuple4Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
    * the product type.
    */
   implicit def Tuple5Ord[A: Ord, B: Ord, C: Ord, D: Ord, E: Ord]: Ord[(A, B, C, D, E)] =
-    make {
-      case ((a1, b1, c1, d1, e1), (a2, b2, c2, d2, e2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1), (a2, b2, c2, d2, e2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2)
-    }
+      },
+      Equal.Tuple5Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
    * the product type.
    */
   implicit def Tuple6Ord[A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord]: Ord[(A, B, C, D, E, F)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1), (a2, b2, c2, d2, e2, f2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1), (a2, b2, c2, d2, e2, f2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2)
-    }
+      },
+      Equal.Tuple6Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
    * the product type.
    */
   implicit def Tuple7Ord[A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord]: Ord[(A, B, C, D, E, F, G)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1, g1), (a2, b2, c2, d2, e2, f2, g2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1, g1), (a2, b2, c2, d2, e2, f2, g2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2)
-    }
+      },
+      Equal.Tuple7Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -454,10 +422,12 @@ object Ord extends Lawful[Ord] {
    */
   implicit def Tuple8Ord[A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord, H: Ord]
     : Ord[(A, B, C, D, E, F, G, H)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1, g1, h1), (a2, b2, c2, d2, e2, f2, g2, h2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1, g1, h1), (a2, b2, c2, d2, e2, f2, g2, h2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2)
-    }
+      },
+      Equal.Tuple8Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -465,10 +435,12 @@ object Ord extends Lawful[Ord] {
    */
   implicit def Tuple9Ord[A: Ord, B: Ord, C: Ord, D: Ord, E: Ord, F: Ord, G: Ord, H: Ord, I: Ord]
     : Ord[(A, B, C, D, E, F, G, H, I)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1, g1, h1, i1), (a2, b2, c2, d2, e2, f2, g2, h2, i2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1, g1, h1, i1), (a2, b2, c2, d2, e2, f2, g2, h2, i2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2)
-    }
+      },
+      Equal.Tuple9Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -486,10 +458,12 @@ object Ord extends Lawful[Ord] {
     I: Ord,
     J: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1, g1, h1, i1, j1), (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1, g1, h1, i1, j1), (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2)
-    }
+      },
+      Equal.Tuple10Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -508,10 +482,12 @@ object Ord extends Lawful[Ord] {
     J: Ord,
     K: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1), (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1), (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2)
-    }
+      },
+      Equal.Tuple11Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -531,10 +507,12 @@ object Ord extends Lawful[Ord] {
     K: Ord,
     L: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L)] =
-    make {
-      case ((a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1), (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2)) =>
+    makeFrom(
+      { case ((a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1), (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2)) =>
         (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2)
-    }
+      },
+      Equal.Tuple12Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -555,13 +533,16 @@ object Ord extends Lawful[Ord] {
     L: Ord,
     M: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2)
+      },
+      Equal.Tuple13Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -583,13 +564,16 @@ object Ord extends Lawful[Ord] {
     M: Ord,
     N: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2)
+      },
+      Equal.Tuple14Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -612,13 +596,16 @@ object Ord extends Lawful[Ord] {
     N: Ord,
     O: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2)
+      },
+      Equal.Tuple15Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -642,13 +629,16 @@ object Ord extends Lawful[Ord] {
     O: Ord,
     P: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2)
+      },
+      Equal.Tuple16Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -673,13 +663,16 @@ object Ord extends Lawful[Ord] {
     P: Ord,
     Q: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2)
+      },
+      Equal.Tuple17Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -705,13 +698,16 @@ object Ord extends Lawful[Ord] {
     Q: Ord,
     R: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2)
+      },
+      Equal.Tuple18Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -738,13 +734,16 @@ object Ord extends Lawful[Ord] {
     R: Ord,
     S: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2)
+      },
+      Equal.Tuple19Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -772,13 +771,16 @@ object Ord extends Lawful[Ord] {
     S: Ord,
     T: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1, t1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2, t2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2) <> (t1 =?= t2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1, t1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2, t2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2) <> (t1 =?= t2)
+      },
+      Equal.Tuple20Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -807,13 +809,16 @@ object Ord extends Lawful[Ord] {
     T: Ord,
     U: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1, t1, u1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2, t2, u2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2) <> (t1 =?= t2) <> (u1 =?= u2)
-    }
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1, t1, u1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2, t2, u2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2) <> (t1 =?= t2) <> (u1 =?= u2)
+      },
+      Equal.Tuple21Equal
+    )
 
   /**
    * Derives an `Ord` for a product type given an `Ord` for each element of
@@ -843,20 +848,16 @@ object Ord extends Lawful[Ord] {
     U: Ord,
     V: Ord
   ]: Ord[(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V)] =
-    make {
-      case (
-          (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1, t1, u1, v1),
-          (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2, t2, u2, v2)
-          ) =>
-        (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2) <> (t1 =?= t2) <> (u1 =?= u2) <> (v1 =?= v2)
-    }
-
-  /**
-   * Equality for `Unit` values. Since there is only one `Unit` value all
-   * values will be equal.
-   */
-  implicit val UnitOrd: Ord[Unit] =
-    make((_, _) => Ordering.Equals)
+    makeFrom(
+      {
+        case (
+              (a1, b1, c1, d1, e1, f1, g1, h1, i1, j1, k1, l1, m1, n1, o1, p1, q1, r1, s1, t1, u1, v1),
+              (a2, b2, c2, d2, e2, f2, g2, h2, i2, j2, k2, l2, m2, n2, o2, p2, q2, r2, s2, t2, u2, v2)
+            ) =>
+          (a1 =?= a2) <> (b1 =?= b2) <> (c1 =?= c2) <> (d1 =?= d2) <> (e1 =?= e2) <> (f1 =?= f2) <> (g1 =?= g2) <> (h1 =?= h2) <> (i1 =?= i2) <> (j1 =?= j2) <> (k1 =?= k2) <> (l1 =?= l2) <> (m1 =?= m2) <> (n1 =?= n2) <> (o1 =?= o2) <> (p1 =?= p2) <> (q1 =?= q2) <> (r1 =?= r2) <> (s1 =?= s2) <> (t1 =?= t2) <> (u1 =?= u2) <> (v1 =?= v2)
+      },
+      Equal.Tuple22Equal
+    )
 
   /**
    * Derives an `Ord[Vector[A]]` given an `Ord[A]`.
@@ -866,6 +867,7 @@ object Ord extends Lawful[Ord] {
       val j = l.length
       val k = r.length
 
+      @tailrec
       def loop(i: Int): Ordering =
         if (i == j && i == k) Ordering.Equals
         else if (i == j) Ordering.LessThan
@@ -934,56 +936,62 @@ sealed trait Ordering { self =>
   /**
    * Returns whether this `Ordering` is `Ordering.Equals`.
    */
-  final def isEqual: Boolean = self match {
-    case Ordering.Equals => true
-    case _               => false
-  }
+  final def isEqual: Boolean =
+    self match {
+      case Ordering.Equals => true
+      case _               => false
+    }
 
   /**
    * Returns whether this `Ordering` is `Ordering.GreaterThan`.
    */
-  final def isGreaterThan: Boolean = self match {
-    case Ordering.GreaterThan => true
-    case _                    => false
-  }
+  final def isGreaterThan: Boolean =
+    self match {
+      case Ordering.GreaterThan => true
+      case _                    => false
+    }
 
   /**
    * Returns whether this `Ordering` is `Ordering.LessThan`.
    */
-  final def isLessThan: Boolean = self match {
-    case Ordering.LessThan => true
-    case _                 => false
-  }
+  final def isLessThan: Boolean =
+    self match {
+      case Ordering.LessThan => true
+      case _                 => false
+    }
 
   /**
    * Converts this `Ordering` to an ordinal representation, with `0`
    * representing `LessThan`, `1` representing `Equals` and `2` representing
    * `GreaterThan`.
    */
-  final def ordinal: Int = self match {
-    case Ordering.LessThan    => 0
-    case Ordering.Equals      => 1
-    case Ordering.GreaterThan => 2
-  }
+  final def ordinal: Int =
+    self match {
+      case Ordering.LessThan    => 0
+      case Ordering.Equals      => 1
+      case Ordering.GreaterThan => 2
+    }
 
   /**
    * Returns this ordering, but if this ordering is equal returns the
    * specified ordering.
    */
-  final def orElse(that: => Ordering): Ordering = self match {
-    case Ordering.Equals => that
-    case ordering        => ordering
-  }
+  final def orElse(that: => Ordering): Ordering =
+    self match {
+      case Ordering.Equals => that
+      case ordering        => ordering
+    }
 
   /**
    * Returns the opposite of this `Ordering`, with `LessThan` converted to
    * `GreaterThan` and `GreaterThan` converted to `LessThan`.
    */
-  final def opposite: Ordering = self match {
-    case Ordering.LessThan    => Ordering.GreaterThan
-    case Ordering.Equals      => Ordering.Equals
-    case Ordering.GreaterThan => Ordering.LessThan
-  }
+  final def opposite: Ordering =
+    self match {
+      case Ordering.LessThan    => Ordering.GreaterThan
+      case Ordering.Equals      => Ordering.Equals
+      case Ordering.GreaterThan => Ordering.LessThan
+    }
 }
 
 object Ordering {
@@ -1001,8 +1009,8 @@ object Ordering {
     else Equals
 
   /**
-   * Ordering for `Ordering` values.
+   * `Hash` and `Ord` instance for `Ordering` values.
    */
-  implicit val orderingOrdering: Ord[Ordering] =
-    Ord((l: Ordering, r: Ordering) => Ord[Int].compare(l.ordinal, r.ordinal))
+  implicit val OrderingHashOrd: Hash[Ordering] with Ord[Ordering] =
+    HashOrd.make((x: Ordering) => x.hashCode, (l: Ordering, r: Ordering) => Ord[Int].compare(l.ordinal, r.ordinal))
 }

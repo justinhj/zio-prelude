@@ -6,6 +6,8 @@ import zio.prelude.coherent.DeriveEqualIdentityBothInvariant
 import zio.test.TestResult
 import zio.test.laws._
 
+import com.github.ghik.silencer.silent
+
 /**
  * A binary operator that combines two values of types `F[A]` and `F[B]` to
  * produce an `F[(A, B)]` with an identity.
@@ -18,14 +20,11 @@ trait IdentityBoth[F[_]] extends AssociativeBoth[F] {
    * produce an `F[(A, B)]`.
    */
   def any: F[Any]
-
-  /**
-   * Combines two values of types `F[A]` and `F[B]` to produce an `F[(A, B)]`.
-   */
-  def both[A, B](fa: => F[A], fb: => F[B]): F[(A, B)]
 }
 
+@silent("Unused import")
 object IdentityBoth extends LawfulF.Invariant[DeriveEqualIdentityBothInvariant, Equal] {
+  import zio._ // for zio.EitherCompat
 
   /**
    * For all `fa`, `both(identity, fa)` is equivalent to `fa`.
@@ -57,7 +56,7 @@ object IdentityBoth extends LawfulF.Invariant[DeriveEqualIdentityBothInvariant, 
    * The set of law laws that instances of `IdentityBoth` must satisfy.
    */
   val laws: LawsF.Invariant[DeriveEqualIdentityBothInvariant, Equal] =
-    leftIdentityLaw + rightIdentityLaw
+    leftIdentityLaw + rightIdentityLaw + AssociativeBoth.laws
 
   /**
    * Summons an implicit `IdentityBoth[F]`.
@@ -65,40 +64,16 @@ object IdentityBoth extends LawfulF.Invariant[DeriveEqualIdentityBothInvariant, 
   def apply[F[_]](implicit identityBoth: IdentityBoth[F]): IdentityBoth[F] =
     identityBoth
 
-  /**
-   * The `IdentityBoth` instance for `Option`.
-   */
-  implicit val OptionIdentityBoth: IdentityBoth[Option] =
-    new IdentityBoth[Option] {
-      val any: Option[Any] =
-        Some(())
-      def both[A, B](fa: => Option[A], fb: => Option[B]): Option[(A, B)] =
-        (fa, fb) match {
-          case (Some(a), Some(b)) => Some((a, b))
-          case _                  => None
-        }
-    }
+  def fromCovariantIdentityFlatten[F[+_]](implicit
+    covariant: Covariant[F],
+    identityFlatten: IdentityFlatten[F]
+  ): IdentityBoth[F] = new IdentityBoth[F] {
 
-  /**
-   * The `IdentityBoth` instance for `List`.
-   */
-  implicit val ListAssociativeIdentityBoth: IdentityBoth[List] =
-    new IdentityBoth[List] {
-      val any: List[Any] =
-        List(())
-      def both[A, B](fa: => List[A], fb: => List[B]): List[(A, B)] = fa.flatMap(a => fb.map(b => (a, b)))
-    }
+    override def both[A, B](fa: => F[A], fb: => F[B]): F[(A, B)] = fa.map(a => fb.map(b => (a, b))).flatten
 
-  /**
-   * The `IdentityBoth` instance for `Id`.
-   */
-  implicit val IdIdentityBoth: IdentityBoth[Id] =
-    new IdentityBoth[Id] {
-      val any: Id[Any] = Id(())
+    override def any: F[Any] = identityFlatten.any
 
-      def both[A, B](fa: => Id[A], fb: => Id[B]): Id[(A, B)] =
-        Id(Id.unwrap(fa) -> Id.unwrap(fb))
-    }
+  }
 }
 
 trait IdentityBothSyntax {

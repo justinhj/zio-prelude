@@ -42,9 +42,9 @@ sealed trait NonEmptyList[+A] { self =>
   @tailrec
   final def corresponds[B](that: NonEmptyList[B])(f: (A, B) => Boolean): Boolean =
     (self, that) match {
-      case (Cons(h1, t1), Cons(h2, t2)) if (f(h1, h2)) => t1.corresponds(t2)(f)
-      case (Single(h1), Single(h2))                    => f(h1, h2)
-      case _                                           => false
+      case (Cons(h1, t1), Cons(h2, t2)) if f(h1, h2) => t1.corresponds(t2)(f)
+      case (Single(h1), Single(h2))                  => f(h1, h2)
+      case _                                         => false
     }
 
   /**
@@ -57,12 +57,39 @@ sealed trait NonEmptyList[+A] { self =>
   /**
    * Removes duplicate elements from this `NonEmptyList`.
    */
-  final def distinct(implicit A: Hash[A]): NonEmptyList[A] =
-    reduceMapLeft(a => (single(a), Set(a.hash))) {
-      case ((as, seen), a) =>
-        val hash = a.hash
-        if (seen(hash)) (as, seen) else (cons(a, as), seen + hash)
+  final def distinct: NonEmptyList[A] =
+    reduceMapLeft(a => (single(a), Set(a))) { case ((as, seen), a) =>
+      if (seen(a)) (as, seen) else (cons(a, as), seen + a)
     }._1.reverse
+
+  /**
+   * Drops the first `n` elements from this `NonEmptyList` returning a `List`.
+   */
+  @tailrec
+  final def drop(n: Int): List[A] =
+    if (n <= 0) self
+    else
+      self match {
+        case Cons(_, t) => t.drop(n - 1)
+        case Single(_)  => Nil
+      }
+
+  /**
+   * Drops the last `n` elements from this `NonEmptyList` returning a `List`.
+   */
+  final def dropRight(n: Int): List[A] =
+    take(length - n)
+
+  /**
+   * Drops elements from the start of this `NonEmptyList` that satisfy the
+   * specified predicate returning a `List`.
+   */
+  @tailrec
+  final def dropWhile(f: A => Boolean): List[A] =
+    self match {
+      case Cons(h, t) => if (f(h)) t.dropWhile(f) else h :: t
+      case Single(h)  => if (f(h)) Nil else single(h)
+    }
 
   /**
    * Returns whether this `NonEmptyList` and the specified `NonEmptyList` are
@@ -70,8 +97,9 @@ sealed trait NonEmptyList[+A] { self =>
    */
   override final def equals(that: Any): Boolean =
     that match {
-      case that: NonEmptyList[_] => self.corresponds(that)(_ == _)
-      case _                     => false
+      case that: AnyRef if self.eq(that) => true
+      case that: NonEmptyList[_]         => self.corresponds(that)(_ == _)
+      case _                             => false
     }
 
   /**
@@ -150,9 +178,8 @@ sealed trait NonEmptyList[+A] { self =>
    * Returns the hashCode of this `NonEmptyList`.
    */
   override final def hashCode: Int = {
-    val (hash, n) = foldLeft((nonEmptyListSeed, 0)) {
-      case ((hash, n), a) =>
-        (MurmurHash3.mix(hash, a.hashCode), n + 1)
+    val (hash, n) = foldLeft((nonEmptyListSeed, 0)) { case ((hash, n), a) =>
+      (MurmurHash3.mix(hash, a.hashCode), n + 1)
     }
     MurmurHash3.finalizeHash(hash, n)
   }
@@ -187,7 +214,7 @@ sealed trait NonEmptyList[+A] { self =>
    * is defined on.
    */
   final def maxBy[B](f: A => B)(implicit B: Ord[B]): A = {
-    implicit val A = B.contramap(f)
+    implicit val A: Ord[A] = B.contramap(f)
     reduceMap(Max[A])
   }
 
@@ -203,7 +230,7 @@ sealed trait NonEmptyList[+A] { self =>
    * is defined on.
    */
   final def minBy[B](f: A => B)(implicit B: Ord[B]): A = {
-    implicit val A = B.contramap(f)
+    implicit val A: Ord[A] = B.contramap(f)
     reduceMap(Min[A])
   }
 
@@ -310,6 +337,43 @@ sealed trait NonEmptyList[+A] { self =>
     unfold(self)(identity)(_.tailOption)
 
   /**
+   * Takes the first `n` elements from this `NonEmptyList` returning a `List`.
+   */
+  final def take(n: Int): List[A] = {
+    @tailrec
+    def loop(n1: Int, nel: NonEmptyList[A], taken: List[A]): List[A] =
+      if (n1 <= 0) taken
+      else
+        nel match {
+          case Cons(h, t) => loop(n1 - 1, t, h :: taken)
+          case Single(h)  => h :: taken
+        }
+
+    loop(n, self, Nil).reverse
+  }
+
+  /**
+   * Takes the last `n` elements from this `NonEmptyList` returning a `List`.
+   */
+  final def takeRight(n: Int): List[A] =
+    drop(length - n)
+
+  /**
+   * Takes elements from the start of this `NonEmptyList` that satisfy the
+   * specified predicate returning a `List`.
+   */
+  final def takeWhile(f: A => Boolean): List[A] = {
+    @tailrec
+    def loop(nel: NonEmptyList[A], taken: List[A]): List[A] =
+      nel match {
+        case Cons(h, t) => if (f(h)) loop(t, h :: taken) else taken
+        case Single(h)  => if (f(h)) h :: taken else taken
+      }
+
+    loop(self, Nil).reverse
+  }
+
+  /**
    * Converts this `NonEmptyList` to the `::` case of a `List`.
    */
   final def toCons[A1 >: A]: ::[A1] =
@@ -341,8 +405,8 @@ sealed trait NonEmptyList[+A] { self =>
    * two and elements combined pairwise using the specified function.
    */
   final def zipWith[B, C](that: NonEmptyList[B])(f: (A, B) => C): NonEmptyList[C] =
-    unfold((self, that)) {
-      case (l, r) => f(l.head, r.head)
+    unfold((self, that)) { case (l, r) =>
+      f(l.head, r.head)
     } {
       case (Cons(_, t1), Cons(_, t2)) => Some((t1, t2))
       case _                          => None
@@ -352,8 +416,8 @@ sealed trait NonEmptyList[+A] { self =>
    * Annotates each element of this `NonEmptyList` with its index.
    */
   final def zipWithIndex: NonEmptyList[(A, Int)] =
-    unfold((self, 0)) {
-      case (as, n) => (as.head, n)
+    unfold((self, 0)) { case (as, n) =>
+      (as.head, n)
     } {
       case (Cons(_, t), n) => Some((t, n + 1))
       case _               => None
@@ -372,20 +436,11 @@ object NonEmptyList extends LowPriorityNonEmptyListImplicits {
     Associative.make(_ ++ _)
 
   /**
-   * The `AssociativeBoth` instance for `NonEmptyList`.
-   */
-  implicit val NonEmptyListAssociativeBoth: AssociativeBoth[NonEmptyList] =
-    new AssociativeBoth[NonEmptyList] {
-      def both[A, B](fa: => NonEmptyList[A], fb: => NonEmptyList[B]): NonEmptyList[(A, B)] =
-        fa.flatMap(a => fb.map(b => (a, b)))
-    }
-
-  /**
    * The `IdentityFlatten` instance for `NonEmptyList`.
    */
   implicit val NonEmptyListIdentityFlatten: IdentityFlatten[NonEmptyList] =
     new IdentityFlatten[NonEmptyList] {
-      val any: NonEmptyList[Any] = single(())
+      val any: NonEmptyList[Any]                                          = single(())
       def flatten[A](ffa: NonEmptyList[NonEmptyList[A]]): NonEmptyList[A] =
         ffa.flatten
     }
@@ -421,11 +476,17 @@ object NonEmptyList extends LowPriorityNonEmptyListImplicits {
     }
 
   /**
-   * The `IdentityBoth` instance for `NonEmptyList`.
+   * Derives a `Hash[NonEmptyList[A]]` given a `Hash[A]`.
+   */
+  implicit def NonEmptyListHash[A: Hash]: Hash[NonEmptyList[A]] =
+    Hash.make(_.map(_.hash).hashCode, _.corresponds(_)(_ === _))
+
+  /**
+   * The `IdentityBoth` (and thus `AssociativeBoth`) instance for `NonEmptyList`.
    */
   implicit val NonEmptyListIdentityBoth: IdentityBoth[NonEmptyList] =
     new IdentityBoth[NonEmptyList] {
-      val any: NonEmptyList[Any] =
+      val any: NonEmptyList[Any]                                                           =
         single(())
       def both[A, B](fa: => NonEmptyList[A], fb: => NonEmptyList[B]): NonEmptyList[(A, B)] =
         fa.flatMap(a => fb.map(b => (a, b)))
@@ -439,25 +500,6 @@ object NonEmptyList extends LowPriorityNonEmptyListImplicits {
       def foreach1[F[+_]: AssociativeBoth: Covariant, A, B](fa: NonEmptyList[A])(f: A => F[B]): F[NonEmptyList[B]] =
         fa.foreach(f)
     }
-
-  /**
-   * Derives an `Ord[NonEmptyList[A]]` given an `Ord[A]`.
-   */
-  implicit def NonEmptyListOrd[A: Ord]: Ord[NonEmptyList[A]] = {
-
-    @tailrec
-    def loop[A: Ord](left: NonEmptyList[A], right: NonEmptyList[A]): Ordering =
-      (left, right) match {
-        case (Single(h1), Single(h2))  => Ord[A].compare(h1, h2)
-        case (Single(h1), Cons(h2, _)) => Ord[A].compare(h1, h2) <> Ordering.LessThan
-        case (Cons(h1, _), Single(h2)) => Ord[A].compare(h1, h2) <> Ordering.GreaterThan
-        case (Cons(h1, t1), Cons(h2, t2)) =>
-          val compare = Ord[A].compare(h1, h2)
-          if (compare.isEqual) loop(t1, t2) else compare
-      }
-
-    Ord.make((l, r) => loop(l, r))
-  }
 
   /**
    * Constructs a `NonEmptyList` from one or more values.
@@ -481,7 +523,16 @@ object NonEmptyList extends LowPriorityNonEmptyListImplicits {
     }
 
   /**
-   * Constructs a `NonEmptyList` from an `Iterable`.
+   * Constructs a `NonEmptyList` from an `Iterable` or `None` otherwise.
+   */
+  def fromIterableOption[A](iterable: Iterable[A]): Option[NonEmptyList[A]] =
+    iterable.toList match {
+      case Nil    => None
+      case h :: t => Some(fromCons(::(h, t)))
+    }
+
+  /**
+   * Constructs a `NonEmptyList` from an element and `Iterable`.
    */
   def fromIterable[A](head: A, tail: Iterable[A]): NonEmptyList[A] =
     fromCons(::(head, tail.toList))
@@ -542,8 +593,21 @@ trait LowPriorityNonEmptyListImplicits {
     }
 
   /**
-   * Derives a `Hash[NonEmptyList[A]]` given a `Hash[A]`.
+   * Derives an `Ord[NonEmptyList[A]]` given an `Ord[A]`.
    */
-  implicit def NonEmptyListHash[A: Hash]: Hash[NonEmptyList[A]] =
-    Hash.make(_.map(_.hash).hashCode, _.corresponds(_)(_ === _))
+  implicit def NonEmptyListOrd[A: Ord]: Ord[NonEmptyList[A]] = {
+
+    @tailrec
+    def loop(left: NonEmptyList[A], right: NonEmptyList[A]): Ordering =
+      (left, right) match {
+        case (Single(h1), Single(h2))     => Ord[A].compare(h1, h2)
+        case (Single(h1), Cons(h2, _))    => Ord[A].compare(h1, h2) <> Ordering.LessThan
+        case (Cons(h1, _), Single(h2))    => Ord[A].compare(h1, h2) <> Ordering.GreaterThan
+        case (Cons(h1, t1), Cons(h2, t2)) =>
+          val compare = Ord[A].compare(h1, h2)
+          if (compare.isEqual) loop(t1, t2) else compare
+      }
+
+    Ord.make((l, r) => loop(l, r))
+  }
 }

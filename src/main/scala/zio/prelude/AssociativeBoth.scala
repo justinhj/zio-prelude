@@ -1,5 +1,9 @@
 package zio.prelude
 
+import scala.annotation.implicitNotFound
+import scala.concurrent.Future
+import scala.util.{ Success, Try }
+
 import zio._
 import zio.prelude.coherent.AssociativeBothDeriveEqualInvariant
 import zio.prelude.newtypes.{ AndF, Failure, OrF }
@@ -7,10 +11,6 @@ import zio.stm.ZSTM
 import zio.stream.{ ZSink, ZStream }
 import zio.test.TestResult
 import zio.test.laws._
-
-import scala.annotation.implicitNotFound
-import scala.concurrent.Future
-import scala.util.Try
 
 /**
  * An associative binary operator that combines two values of types `F[A]`
@@ -57,6 +57,14 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   val laws: LawsF.Invariant[AssociativeBothDeriveEqualInvariant, Equal] =
     associativityLaw
 
+  def fromCovariantAssociativeFlatten[F[+_]](implicit
+    covariant: Covariant[F],
+    identityFlatten: AssociativeFlatten[F]
+  ): AssociativeBoth[F] =
+    new AssociativeBoth[F] {
+      override def both[A, B](fa: => F[A], fb: => F[B]): F[(A, B)] = fa.map(a => fb.map(b => (a, b))).flatten
+    }
+
   /**
    * Combines 2 `F` values using the provided function `f`.
    */
@@ -78,8 +86,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   )(
     f: (A0, A1, A2) => B
   ): F[B] =
-    (a0 <*> a1 <*> a2).map {
-      case ((a0, a1), a2) => f(a0, a1, a2)
+    (a0 <*> a1 <*> a2).map { case ((a0, a1), a2) =>
+      f(a0, a1, a2)
     }
 
   /**
@@ -93,8 +101,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   )(
     f: (A0, A1, A2, A3) => B
   ): F[B] =
-    (a0 <*> a1 <*> a2 <*> a3).map {
-      case (((a0, a1), a2), a3) => f(a0, a1, a2, a3)
+    (a0 <*> a1 <*> a2 <*> a3).map { case (((a0, a1), a2), a3) =>
+      f(a0, a1, a2, a3)
     }
 
   /**
@@ -109,8 +117,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   )(
     f: (A0, A1, A2, A3, A4) => B
   ): F[B] =
-    (a0 <*> a1 <*> a2 <*> a3 <*> a4).map {
-      case ((((a0, a1), a2), a3), a4) => f(a0, a1, a2, a3, a4)
+    (a0 <*> a1 <*> a2 <*> a3 <*> a4).map { case ((((a0, a1), a2), a3), a4) =>
+      f(a0, a1, a2, a3, a4)
     }
 
   /**
@@ -126,8 +134,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   )(
     f: (A0, A1, A2, A3, A4, A5) => B
   ): F[B] =
-    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5).map {
-      case (((((a0, a1), a2), a3), a4), a5) => f(a0, a1, a2, a3, a4, a5)
+    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5).map { case (((((a0, a1), a2), a3), a4), a5) =>
+      f(a0, a1, a2, a3, a4, a5)
     }
 
   /**
@@ -144,8 +152,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   )(
     f: (A0, A1, A2, A3, A4, A5, A6) => B
   ): F[B] =
-    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6).map {
-      case ((((((a0, a1), a2), a3), a4), a5), a6) => f(a0, a1, a2, a3, a4, a5, a6)
+    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6).map { case ((((((a0, a1), a2), a3), a4), a5), a6) =>
+      f(a0, a1, a2, a3, a4, a5, a6)
     }
 
   /**
@@ -163,8 +171,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   )(
     f: (A0, A1, A2, A3, A4, A5, A6, A7) => B
   ): F[B] =
-    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7).map {
-      case (((((((a0, a1), a2), a3), a4), a5), a6), a7) => f(a0, a1, a2, a3, a4, a5, a6, a7)
+    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7).map { case (((((((a0, a1), a2), a3), a4), a5), a6), a7) =>
+      f(a0, a1, a2, a3, a4, a5, a6, a7)
     }
 
   /**
@@ -364,7 +372,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 17 `F` values using the provided function `f`.
    */
-  def mapN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, B](
+  def mapN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, B](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -393,7 +403,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 18 `F` values into a tuple in maps the result with the provided function.
    */
-  def mapN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, B](
+  def mapN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, B](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -417,8 +429,8 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   ): F[B] =
     (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7 <*> a8 <*> a9 <*> a10 <*> a11 <*> a12 <*> a13 <*> a14 <*> a15 <*> a16 <*> a17).map {
       case (
-          ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
-          a17
+            ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
+            a17
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17)
     }
@@ -426,7 +438,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 19 `F` values using the provided function `f`.
    */
-  def mapN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, B](
+  def mapN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, B](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -451,11 +465,11 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   ): F[B] =
     (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7 <*> a8 <*> a9 <*> a10 <*> a11 <*> a12 <*> a13 <*> a14 <*> a15 <*> a16 <*> a17 <*> a18).map {
       case (
-          (
-            ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
-            a17
-          ),
-          a18
+            (
+              ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
+              a17
+            ),
+            a18
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18)
     }
@@ -463,7 +477,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 20 `F` values using the provided function `f`.
    */
-  def mapN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, B](
+  def mapN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, B](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -489,14 +505,17 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   ): F[B] =
     (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7 <*> a8 <*> a9 <*> a10 <*> a11 <*> a12 <*> a13 <*> a14 <*> a15 <*> a16 <*> a17 <*> a18 <*> a19).map {
       case (
-          (
             (
-              ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
-              a17
+              (
+                (
+                  (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
+                  a16
+                ),
+                a17
+              ),
+              a18
             ),
-            a18
-          ),
-          a19
+            a19
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19)
     }
@@ -504,7 +523,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 21 `F` values using the provided function `f`.
    */
-  def mapN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, B](
+  def mapN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, B](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -531,22 +552,79 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   ): F[B] =
     (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7 <*> a8 <*> a9 <*> a10 <*> a11 <*> a12 <*> a13 <*> a14 <*> a15 <*> a16 <*> a17 <*> a18 <*> a19 <*> a20).map {
       case (
-          (
             (
               (
                 (
-                  (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
-                  a16
+                  (
+                    (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
+                    a16
+                  ),
+                  a17
                 ),
-                a17
+                a18
               ),
-              a18
+              a19
             ),
-            a19
-          ),
-          a20
+            a20
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20)
+    }
+
+  /**
+   * Combines 22 `F` values using the provided function `f`.
+   */
+  def mapN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21, B](
+    a0: F[A0],
+    a1: F[A1],
+    a2: F[A2],
+    a3: F[A3],
+    a4: F[A4],
+    a5: F[A5],
+    a6: F[A6],
+    a7: F[A7],
+    a8: F[A8],
+    a9: F[A9],
+    a10: F[A10],
+    a11: F[A11],
+    a12: F[A12],
+    a13: F[A13],
+    a14: F[A14],
+    a15: F[A15],
+    a16: F[A16],
+    a17: F[A17],
+    a18: F[A18],
+    a19: F[A19],
+    a20: F[A20],
+    a21: F[A21]
+  )(
+    f: (A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21) => B
+  ): F[B] =
+    (a0 <*> a1 <*> a2 <*> a3 <*> a4 <*> a5 <*> a6 <*> a7 <*> a8 <*> a9 <*> a10 <*> a11 <*> a12 <*> a13 <*> a14 <*> a15 <*> a16 <*> a17 <*> a18 <*> a19 <*> a20 <*> a21).map {
+      case (
+            (
+              (
+                (
+                  (
+                    (
+                      (
+                        ((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14),
+                        a15
+                      ),
+                      a16
+                    ),
+                    a17
+                  ),
+                  a18
+                ),
+                a19
+              ),
+              a20
+            ),
+            a21
+          ) =>
+        f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21)
     }
 
   /**
@@ -794,7 +872,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 17 `F` values into a tuple.
    */
-  def tupleN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16](
+  def tupleN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -820,7 +900,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 18 `F` values into a tuple.
    */
-  def tupleN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17](
+  def tupleN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -847,7 +929,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 19 `F` values into a tuple.
    */
-  def tupleN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18](
+  def tupleN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -875,7 +959,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 20 `F` values into a tuple.
    */
-  def tupleN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19](
+  def tupleN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -904,7 +990,9 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
   /**
    * Combines 21 `F` values into a tuple.
    */
-  def tupleN[F[+_]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20](
+  def tupleN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20](
     a0: F[A0],
     a1: F[A1],
     a2: F[A2],
@@ -932,6 +1020,39 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
     )
 
   /**
+   * Combines 22 `F` values into a tuple.
+   */
+  def tupleN[F[
+    +_
+  ]: AssociativeBoth: Covariant, A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21](
+    a0: F[A0],
+    a1: F[A1],
+    a2: F[A2],
+    a3: F[A3],
+    a4: F[A4],
+    a5: F[A5],
+    a6: F[A6],
+    a7: F[A7],
+    a8: F[A8],
+    a9: F[A9],
+    a10: F[A10],
+    a11: F[A11],
+    a12: F[A12],
+    a13: F[A13],
+    a14: F[A14],
+    a15: F[A15],
+    a16: F[A16],
+    a17: F[A17],
+    a18: F[A18],
+    a19: F[A19],
+    a20: F[A20],
+    a21: F[A21]
+  ): F[(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21)] =
+    mapN(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21)(
+      (_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)
+    )
+
+  /**
    * The `AssociativeBoth` instance for `Chunk`.
    */
   implicit def ChunkAssociativeBoth: AssociativeBoth[Chunk] =
@@ -940,19 +1061,23 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
     }
 
   /**
-   * The `AssociativeBoth` instance for `Either`.
+   * The `IdentityBoth` (and `AssociativeBoth`) instance for `Either`.
    */
-  implicit def EitherAssociativeBoth[L]: AssociativeBoth[({ type lambda[+r] = Either[L, r] })#lambda] =
-    new AssociativeBoth[({ type lambda[+r] = Either[L, r] })#lambda] {
+  implicit def EitherIdentityBoth[L]: IdentityBoth[({ type lambda[+r] = Either[L, r] })#lambda] =
+    new IdentityBoth[({ type lambda[+r] = Either[L, r] })#lambda] {
+      val any: Either[L, Any] = Right(())
+
       def both[A, B](fa: => Either[L, A], fb: => Either[L, B]): Either[L, (A, B)] =
         fa.flatMap(a => fb.map(b => (a, b)))
     }
 
   /**
-   * The `AssociativeBoth` instance for a failed `Either`
+   * The `IdentityBoth` (and `AssociativeBoth`) instance for a failed `Either`
    */
-  implicit def EitherFailedAssociativeBoth[R]: AssociativeBoth[({ type lambda[+l] = Failure[Either[l, R]] })#lambda] =
-    new AssociativeBoth[({ type lambda[+l] = Failure[Either[l, R]] })#lambda] {
+  implicit def EitherFailedIdentityBoth[R]: IdentityBoth[({ type lambda[+l] = Failure[Either[l, R]] })#lambda] =
+    new IdentityBoth[({ type lambda[+l] = Failure[Either[l, R]] })#lambda] {
+      val any: Failure[Either[Any, R]] = Failure.wrap(Left(()))
+
       def both[A, B](fa: => Failure[Either[A, R]], fb: => Failure[Either[B, R]]): Failure[Either[(A, B), R]] =
         Failure.wrap {
           Failure
@@ -979,26 +1104,34 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
     }
 
   /**
-   * The `AssociativeBoth` instance for `Future`.
+   * The `IdentityBoth` (and `AssociativeBoth`) instance for `Future`.
    */
-  implicit def FutureAssociativeBoth: AssociativeBoth[Future] =
-    new AssociativeBoth[Future] {
+  implicit val FutureIdentityBoth: IdentityBoth[Future] =
+    new IdentityBoth[Future] {
+      val any: Future[Any] = Future.successful(())
+
       def both[A, B](fa: => Future[A], fb: => Future[B]): Future[(A, B)] = fa zip fb
     }
 
   /**
-   * The `AssociativeBoth` instance for `Id`.
+   * The `IdentityBoth` (and `AssociativeBoth`) instance for `Id`.
    */
-  implicit val IdAssociativeBoth: AssociativeBoth[Id] =
-    new AssociativeBoth[Id] {
-      def both[A, B](fa: => Id[A], fb: => Id[B]): Id[(A, B)] = Id((Id.unwrap(fa), Id.unwrap(fb)))
+  implicit val IdIdentityBoth: IdentityBoth[Id] =
+    new IdentityBoth[Id] {
+      val any: Id[Any] = Id(())
+
+      def both[A, B](fa: => Id[A], fb: => Id[B]): Id[(A, B)] =
+        Id(Id.unwrap(fa) -> Id.unwrap(fb))
     }
 
   /**
-   * The `AssociativeBoth` instance for `List`.
+   * The `IdentityBoth` (and `AssociativeBoth`) instance for `List`.
    */
-  implicit def ListAssociativeBoth: AssociativeBoth[List] =
-    new AssociativeBoth[List] {
+  implicit val ListIdentityBoth: IdentityBoth[List] =
+    new IdentityBoth[List] {
+      val any: List[Any] =
+        List(())
+
       def both[A, B](fa: => List[A], fb: => List[B]): List[(A, B)] = fa.flatMap(a => fb.map(b => (a, b)))
     }
 
@@ -1012,10 +1145,13 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
     }
 
   /**
-   * The `AssociativeBoth` instance for `Option`.
+   * The `IdentityBoth` (with `AssociativeBoth`) instance for `Option`.
    */
-  implicit val OptionAssociativeBoth: AssociativeBoth[Option] =
-    new AssociativeBoth[Option] {
+  implicit val OptionIdentityBoth: IdentityBoth[Option] =
+    new IdentityBoth[Option] {
+      val any: Option[Any] =
+        Some(())
+
       def both[A, B](fa: => Option[A], fb: => Option[B]): Option[(A, B)] =
         (fa, fb) match {
           case (Some(a), Some(b)) => Some((a, b))
@@ -1047,10 +1183,12 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
     }
 
   /**
-   * The `AssociativeBoth` instance for `Try`.
+   * The `IdentityBoth` (and `AssociativeBoth`) instance for `Try`.
    */
-  implicit def TryAssociativeBoth[R, E]: AssociativeBoth[Try] =
-    new AssociativeBoth[Try] {
+  implicit val TryIdentityBoth: IdentityBoth[Try] =
+    new IdentityBoth[Try] {
+      val any: Try[Any] = Success(())
+
       def both[A, B](fa: => Try[A], fb: => Try[B]): Try[(A, B)] = fa.flatMap(a => fb.map(b => (a, b)))
     }
 
@@ -1138,7 +1276,6 @@ object AssociativeBoth extends LawfulF.Invariant[AssociativeBothDeriveEqualInvar
     new AssociativeBoth[({ type lambda[+a] = ZStream[R, E, a] })#lambda] {
       def both[A, B](fa: => ZStream[R, E, A], fb: => ZStream[R, E, B]): ZStream[R, E, (A, B)] = fa cross fb
     }
-
 }
 
 trait AssociativeBothSyntax {
@@ -1220,5 +1357,1075 @@ trait AssociativeBothSyntax {
       fb: => F[B]
     )(f: C => (A, B))(implicit both: AssociativeBoth[F], contravariant: Contravariant[F]): F[C] =
       both.both(fa, fb).contramap(f)
+  }
+
+  implicit class AssociativeBothTuple2Ops[F[+_], T1, T2](tf: => (F[T1], F[T2])) {
+    def mapN[R](f: (T1, T2) => R)(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth.mapN(_: F[T1], _: F[T2])(f)).tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2)] =
+      (AssociativeBoth.tupleN(_: F[T1], _: F[T2])).tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple3Ops[F[+_], T1, T2, T3](tf: => (F[T1], F[T2], F[T3])) {
+    def mapN[R](f: (T1, T2, T3) => R)(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth.mapN(_: F[T1], _: F[T2], _: F[T3])(f)).tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3)] =
+      (AssociativeBoth.tupleN(_: F[T1], _: F[T2], _: F[T3])).tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple4Ops[F[+_], T1, T2, T3, T4](tf: => (F[T1], F[T2], F[T3], F[T4])) {
+    def mapN[R](f: (T1, T2, T3, T4) => R)(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth.mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4])(f)).tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3, T4)] =
+      (AssociativeBoth.tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4])).tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple5Ops[F[+_], T1, T2, T3, T4, T5](tf: => (F[T1], F[T2], F[T3], F[T4], F[T5])) {
+    def mapN[R](f: (T1, T2, T3, T4, T5) => R)(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth.mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5])(f)).tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3, T4, T5)] =
+      (AssociativeBoth.tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5])).tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple6Ops[F[+_], T1, T2, T3, T4, T5, T6](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6])
+  ) {
+    def mapN[R](f: (T1, T2, T3, T4, T5, T6) => R)(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth.mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6])(f)).tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3, T4, T5, T6)] =
+      (AssociativeBoth.tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6])).tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple7Ops[F[+_], T1, T2, T3, T4, T5, T6, T7](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth.mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7])(f)).tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3, T4, T5, T6, T7)] =
+      (AssociativeBoth.tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7])).tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple8Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7], _: F[T8])(f))
+        .tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3, T4, T5, T6, T7, T8)] =
+      (AssociativeBoth
+        .tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7], _: F[T8]))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple9Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8], F[T9])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7], _: F[T8], _: F[T9])(f))
+        .tupled(tf)
+
+    def tupleN(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9)] =
+      (AssociativeBoth
+        .tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7], _: F[T8], _: F[T9]))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple10Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9, T10](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8], F[T9], F[T10])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7], _: F[T8], _: F[T9], _: F[T10])(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)] =
+      (AssociativeBoth
+        .tupleN(_: F[T1], _: F[T2], _: F[T3], _: F[T4], _: F[T5], _: F[T6], _: F[T7], _: F[T8], _: F[T9], _: F[T10]))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple11Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8], F[T9], F[T10], F[T11])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)] =
+      (AssociativeBoth
+        .tupleN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11]
+        ))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple12Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8], F[T9], F[T10], F[T11], F[T12])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)] =
+      (AssociativeBoth
+        .tupleN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12]
+        ))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple13Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8], F[T9], F[T10], F[T11], F[T12], F[T13])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)] =
+      (AssociativeBoth
+        .tupleN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13]
+        ))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple14Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14](
+    tf: => (F[T1], F[T2], F[T3], F[T4], F[T5], F[T6], F[T7], F[T8], F[T9], F[T10], F[T11], F[T12], F[T13], F[T14])
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)] =
+      (AssociativeBoth
+        .tupleN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14]
+        ))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple15Ops[F[+_], T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)] =
+      (AssociativeBoth
+        .tupleN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15]
+        ))
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple16Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16]
+          )
+        )
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple17Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16,
+    T17
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16],
+      F[T17]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16],
+          _: F[T17]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16],
+            _: F[T17]
+          )
+        )
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple18Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16,
+    T17,
+    T18
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16],
+      F[T17],
+      F[T18]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16],
+          _: F[T17],
+          _: F[T18]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16],
+            _: F[T17],
+            _: F[T18]
+          )
+        )
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple19Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16,
+    T17,
+    T18,
+    T19
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16],
+      F[T17],
+      F[T18],
+      F[T19]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16],
+          _: F[T17],
+          _: F[T18],
+          _: F[T19]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16],
+            _: F[T17],
+            _: F[T18],
+            _: F[T19]
+          )
+        )
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple20Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16,
+    T17,
+    T18,
+    T19,
+    T20
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16],
+      F[T17],
+      F[T18],
+      F[T19],
+      F[T20]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16],
+          _: F[T17],
+          _: F[T18],
+          _: F[T19],
+          _: F[T20]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16],
+            _: F[T17],
+            _: F[T18],
+            _: F[T19],
+            _: F[T20]
+          )
+        )
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple21Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16,
+    T17,
+    T18,
+    T19,
+    T20,
+    T21
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16],
+      F[T17],
+      F[T18],
+      F[T19],
+      F[T20],
+      F[T21]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16],
+          _: F[T17],
+          _: F[T18],
+          _: F[T19],
+          _: F[T20],
+          _: F[T21]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16],
+            _: F[T17],
+            _: F[T18],
+            _: F[T19],
+            _: F[T20],
+            _: F[T21]
+          )
+        )
+        .tupled(tf)
+  }
+
+  implicit class AssociativeBothTuple22Ops[
+    F[+_],
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
+    T9,
+    T10,
+    T11,
+    T12,
+    T13,
+    T14,
+    T15,
+    T16,
+    T17,
+    T18,
+    T19,
+    T20,
+    T21,
+    T22
+  ](
+    tf: => (
+      F[T1],
+      F[T2],
+      F[T3],
+      F[T4],
+      F[T5],
+      F[T6],
+      F[T7],
+      F[T8],
+      F[T9],
+      F[T10],
+      F[T11],
+      F[T12],
+      F[T13],
+      F[T14],
+      F[T15],
+      F[T16],
+      F[T17],
+      F[T18],
+      F[T19],
+      F[T20],
+      F[T21],
+      F[T22]
+    )
+  ) {
+    def mapN[R](
+      f: (T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22) => R
+    )(implicit both: AssociativeBoth[F], covariant: Covariant[F]): F[R] =
+      (AssociativeBoth
+        .mapN(
+          _: F[T1],
+          _: F[T2],
+          _: F[T3],
+          _: F[T4],
+          _: F[T5],
+          _: F[T6],
+          _: F[T7],
+          _: F[T8],
+          _: F[T9],
+          _: F[T10],
+          _: F[T11],
+          _: F[T12],
+          _: F[T13],
+          _: F[T14],
+          _: F[T15],
+          _: F[T16],
+          _: F[T17],
+          _: F[T18],
+          _: F[T19],
+          _: F[T20],
+          _: F[T21],
+          _: F[T22]
+        )(f))
+        .tupled(tf)
+
+    def tupleN(implicit
+      both: AssociativeBoth[F],
+      covariant: Covariant[F]
+    ): F[(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22)] =
+      (
+        AssociativeBoth
+          .tupleN(
+            _: F[T1],
+            _: F[T2],
+            _: F[T3],
+            _: F[T4],
+            _: F[T5],
+            _: F[T6],
+            _: F[T7],
+            _: F[T8],
+            _: F[T9],
+            _: F[T10],
+            _: F[T11],
+            _: F[T12],
+            _: F[T13],
+            _: F[T14],
+            _: F[T15],
+            _: F[T16],
+            _: F[T17],
+            _: F[T18],
+            _: F[T19],
+            _: F[T20],
+            _: F[T21],
+            _: F[T22]
+          )
+        )
+        .tupled(tf)
   }
 }

@@ -1,5 +1,7 @@
 package zio.prelude
 
+import scala.annotation.implicitNotFound
+
 import zio._
 import zio.prelude.coherent.CommutativeBothDeriveEqualInvariant
 import zio.prelude.newtypes.{ AndF, Failure, OrF }
@@ -7,21 +9,12 @@ import zio.stream.{ ZSink, ZStream }
 import zio.test.TestResult
 import zio.test.laws._
 
-import scala.annotation.implicitNotFound
-
 /**
  * A commutative binary operator that combines two values of types `F[A]` and
  * `F[B]` to produce an `F[(A, B)]`.
  */
 @implicitNotFound("No implicit CommutativeBoth defined for ${F}.")
-trait CommutativeBoth[F[_]] extends AssociativeBoth[F] {
-
-  /**
-   * Combines two values of types `F[A]` and `F[B]` to produce an `F[(A, B)]`.
-   */
-  def both[A, B](fa: => F[A], fb: => F[B]): F[(A, B)]
-
-}
+trait CommutativeBoth[F[_]] extends AssociativeBoth[F]
 
 object CommutativeBoth extends LawfulF.Invariant[CommutativeBothDeriveEqualInvariant, Equal] {
 
@@ -42,7 +35,7 @@ object CommutativeBoth extends LawfulF.Invariant[CommutativeBothDeriveEqualInvar
    * The set of law laws that instances of `CommutativeBoth` must satisfy.
    */
   val laws: LawsF.Invariant[CommutativeBothDeriveEqualInvariant, Equal] =
-    commutativeLaw
+    commutativeLaw + AssociativeBoth.laws
 
   /**
    * Summons an implicit `CommutativeBoth[F]`.

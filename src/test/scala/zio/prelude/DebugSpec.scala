@@ -1,30 +1,32 @@
 package zio.prelude
 
-import zio.prelude.Debug.{ Renderer, Repr }
-import zio.prelude.Debug._
-import zio.test._
+import scala.collection.immutable.ListMap
+
+import zio.prelude.Debug.{ Renderer, Repr, _ }
+import zio.random.Random
+import zio.test.{ TestResult, _ }
 
 object DebugSpec extends DefaultRunnableSpec {
 
-  def primitiveTest[A: Debug](renderer: Renderer)(a: A, exp: Option[String] = None) =
+  def primitiveTest[A: Debug](renderer: Renderer)(a: A, exp: Option[String] = None): TestResult =
     assert(a.debug.render(renderer))(equalTo(exp.getOrElse(a.toString)))
 
-  def primScalaTest[A: Debug](a: A)                              = primitiveTest[A](Renderer.Scala)(a)
-  def primSimpleTest[A: Debug](a: A, exp: Option[String] = None) = primitiveTest[A](Renderer.Simple)(a, exp)
-  def primFullTest[A: Debug](a: A, exp: Option[String] = None)   = primitiveTest[A](Renderer.Full)(a, exp)
+  def primScalaTest[A: Debug](a: A): TestResult                              = primitiveTest[A](Renderer.Scala)(a)
+  def primSimpleTest[A: Debug](a: A, exp: Option[String] = None): TestResult = primitiveTest[A](Renderer.Simple)(a, exp)
+  def primFullTest[A: Debug](a: A, exp: Option[String] = None): TestResult   = primitiveTest[A](Renderer.Full)(a, exp)
 
-  case class TestCase(string: String, number: Int, list: List[Double])
-  val genTestCase = for {
+  final case class TestCase(string: String, number: Int, list: List[Double])
+  val genTestCase: Gen[Random with Sized, TestCase] = for {
     str    <- Gen.anyString
     number <- Gen.anyInt
     list   <- Gen.listOf(Gen.anyDouble)
   } yield TestCase(str, number, list)
 
-  implicit val DebugTestCase = Debug.make[TestCase](a =>
+  implicit val DebugTestCase: Debug[TestCase] = Debug.make[TestCase](a =>
     Repr.Constructor(
       List("DebugSpec"),
       "TestCase",
-      Map("string" -> a.string.debug, "number" -> a.number.debug, "list" -> a.list.debug)
+      ListMap("string" -> a.string.debug, "number" -> a.number.debug, "list" -> a.list.debug)
     )
   )
 
@@ -32,17 +34,17 @@ object DebugSpec extends DefaultRunnableSpec {
   case object TestObject1 extends TestTrait
   case object TestObject2 extends TestTrait
 
-  implicit val testObject: Debug[TestTrait] = _ match {
+  implicit val testObject: Debug[TestTrait] = {
     case TestObject1 => Repr.Object(List("DebugSpec"), "TestObject1")
     case TestObject2 => Repr.Object(List("DebugSpec"), "TestObject2")
   }
 
-  val genTestTrait = Gen.elements(List[TestTrait](TestObject1, TestObject2): _*)
+  val genTestTrait: Gen[Random, TestTrait] = Gen.elements(List[TestTrait](TestObject1, TestObject2): _*)
 
   def expectedTupleFull(n: Int)(v: Int): String   = s"scala.Tuple$n(${List.fill(n)(v).mkString(", ")})"
-  def expectedTupleSimple(n: Int)(v: Int): String = s"Tuple$n(${List.fill(n)(v).mkString(", ")})"
+  def expectedTupleSimple(n: Int)(v: Int): String = s"(${List.fill(n)(v).mkString(", ")})"
 
-  def spec =
+  def spec: ZSpec[Environment, Failure] =
     suite("DebugSpec")(
       suite("ScalaRenderer")(
         testM("unit")(check(Gen.unit)(primScalaTest(_))),
@@ -52,6 +54,7 @@ object DebugSpec extends DefaultRunnableSpec {
         testM("long")(check(Gen.anyLong)(primScalaTest(_))),
         testM("byte")(check(Gen.anyByte)(primScalaTest(_))),
         testM("char")(check(Gen.anyChar)(primScalaTest(_))),
+        testM("short")(check(Gen.anyShort)(primScalaTest(_))),
         testM("string")(check(Gen.anyString)(primScalaTest(_))),
         testM("either")(check(Gen.either(Gen.anyString, Gen.anyInt))(primScalaTest(_))),
         testM("option")(check(Gen.option(Gen.anyInt))(primScalaTest(_))),
@@ -79,7 +82,8 @@ object DebugSpec extends DefaultRunnableSpec {
         testM("float")(check(Gen.anyFloat)(f => primSimpleTest(f, Some(s"${f.toString}f")))),
         testM("long")(check(Gen.anyLong)(l => primSimpleTest(l, Some(s"${l.toString}L")))),
         testM("byte")(check(Gen.anyByte)(primSimpleTest(_))),
-        testM("char")(check(Gen.anyChar)(primSimpleTest(_))),
+        testM("char")(check(Gen.anyChar)(s => primSimpleTest(s, Some(s"'$s'")))),
+        testM("short")(check(Gen.anyShort)(primSimpleTest(_))),
         testM("string")(check(Gen.anyString)(s => primSimpleTest(s, Some(s""""$s"""")))),
         testM("either")(check(Gen.either(Gen.anyInt, Gen.anyInt))(primSimpleTest(_))),
         testM("option")(check(Gen.option(Gen.anyInt))(primSimpleTest(_))),
@@ -115,7 +119,7 @@ object DebugSpec extends DefaultRunnableSpec {
           check(genTestCase)(c =>
             assert(c.debug.render(Renderer.Simple)) {
               val str = s""""${c.string}""""
-              equalTo(s"TestCase(string -> $str, number -> ${c.number}, list -> ${c.list})")
+              equalTo(s"TestCase(string = $str, number = ${c.number}, list = ${c.list})")
             }
           )
         ),
@@ -130,7 +134,8 @@ object DebugSpec extends DefaultRunnableSpec {
         testM("float")(check(Gen.anyFloat)(f => primFullTest(f, Some(s"${f.toString}f")))),
         testM("long")(check(Gen.anyLong)(l => primFullTest(l, Some(s"${l.toString}L")))),
         testM("byte")(check(Gen.anyByte)(primFullTest(_))),
-        testM("char")(check(Gen.anyChar)(primFullTest(_))),
+        testM("char")(check(Gen.anyChar)(s => primFullTest(s, Some(s"'$s'")))),
+        testM("short")(check(Gen.anyShort)(primFullTest(_))),
         testM("string")(check(Gen.anyString)(s => primFullTest(s, Some(s""""$s"""")))),
         testM("either")(
           check(Gen.either(Gen.anyInt, Gen.anyInt))(c =>
@@ -180,7 +185,7 @@ object DebugSpec extends DefaultRunnableSpec {
           check(genTestCase)(c =>
             assert(c.debug.render(Renderer.Full)) {
               val str = s""""${c.string}""""
-              equalTo(s"DebugSpec.TestCase(string -> $str, number -> ${c.number}, list -> scala.${c.list})")
+              equalTo(s"DebugSpec.TestCase(string = $str, number = ${c.number}, list = scala.${c.list})")
             }
           )
         ),

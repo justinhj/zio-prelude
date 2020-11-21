@@ -1,15 +1,15 @@
 package zio.prelude
 
+import scala.annotation.implicitNotFound
+import scala.concurrent.{ ExecutionContext, Future }
+import scala.util.Try
+
 import zio._
 import zio.prelude.coherent.AssociativeEitherDeriveEqualInvariant
 import zio.prelude.newtypes.Failure
 import zio.stream.ZStream
 import zio.test.TestResult
 import zio.test.laws._
-
-import scala.annotation.implicitNotFound
-import scala.concurrent.{ ExecutionContext, Future }
-import scala.util.Try
 
 /**
  * An associative binary operator that combines two values of types `F[A]`
@@ -121,18 +121,21 @@ object AssociativeEither extends LawfulF.Invariant[AssociativeEitherDeriveEqualI
   implicit def FutureAssociativeEither(implicit ec: ExecutionContext): AssociativeEither[Future] =
     new AssociativeEither[Future] {
       def either[A, B](fa: => Future[A], fb: => Future[B]): Future[Either[A, B]] =
-        fa.map(Left(_)).recoverWith {
-          case _: Throwable => fb.map(Right(_))
+        fa.map(Left(_)).recoverWith { case _: Throwable =>
+          fb.map(Right(_))
         }
     }
 
   /**
-   * The `AssociativeEither` instance for `Option`.
+   * The `IdentityEither` (and `AssociativeEither`) instance for `Option`.
    */
-  implicit val OptionAssociativeEither: AssociativeEither[Option] =
-    new AssociativeEither[Option] {
+  implicit val OptionIdentityEither: IdentityEither[Option] =
+    new IdentityEither[Option] {
       def either[A, B](fa: => Option[A], fb: => Option[B]): Option[Either[A, B]] =
         fa.map(Left(_)) orElse fb.map(Right(_))
+
+      val none: Option[Nothing] =
+        None
     }
 
   /**

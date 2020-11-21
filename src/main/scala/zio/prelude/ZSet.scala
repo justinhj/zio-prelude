@@ -1,6 +1,7 @@
 package zio.prelude
 
 import scala.annotation.unchecked.uncheckedVariance
+import scala.collection.immutable.HashMap
 
 import zio.prelude.newtypes.{ Max, Min, Prod, Sum }
 
@@ -11,7 +12,7 @@ import zio.prelude.newtypes.{ Max, Min, Prod, Sum }
  * probability associated with an element in the set if `B` is a rational
  * number, or even whether an element appears at all if `B` is a boolean.
  */
-final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B]) { self =>
+final class ZSet[+A, +B] private (private val map: HashMap[A @uncheckedVariance, B]) { self =>
 
   /**
    * A symbolic alias for `intersect`.
@@ -61,12 +62,11 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
    * appears in this set and the specified set.
    */
   def combine[A1 >: A, B1 >: B](that: ZSet[A1, B1])(implicit ev: Commutative[Sum[B1]]): ZSet[A1, B1] =
-    new ZSet(that.map.foldLeft(self.map.asInstanceOf[Map[A1, B1]]) {
-      case (map, (a, b1)) =>
-        map.get(a) match {
-          case Some(b) => map + (a -> ev.combine(Sum(b), Sum(b1)))
-          case None    => map + (a -> b1)
-        }
+    new ZSet(that.map.foldLeft(self.map.asInstanceOf[HashMap[A1, B1]]) { case (map, (a, b1)) =>
+      map.get(a) match {
+        case Some(b) => map + (a -> ev.combine(Sum(b), Sum(b1)))
+        case None    => map + (a -> b1)
+      }
     })
 
   /**
@@ -75,12 +75,11 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
    * of times it appears in this set and the specified set.
    */
   def diff[A1 >: A, B1 >: B](that: ZSet[A1, B1])(implicit ev: Inverse[Sum[B1]]): ZSet[A1, B1] =
-    new ZSet(that.map.foldLeft(self.map.asInstanceOf[Map[A1, B1]]) {
-      case (map, (a, b1)) =>
-        map.get(a) match {
-          case Some(b) => map + (a -> ev.inverse(Sum(b), Sum(b1)))
-          case None    => map + (a -> ev.inverse(ev.identity, Sum(b1)))
-        }
+    new ZSet(that.map.foldLeft(self.map.asInstanceOf[HashMap[A1, B1]]) { case (map, (a, b1)) =>
+      map.get(a) match {
+        case Some(b) => map + (a -> ev.inverse(Sum(b), Sum(b1)))
+        case None    => map + (a -> ev.inverse(ev.identity, Sum(b1)))
+      }
     })
 
   /**
@@ -89,8 +88,9 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
    */
   override def equals(that: Any): Boolean =
     that match {
-      case that: ZSet[_, _] => self.map == that.map
-      case _                => false
+      case that: AnyRef if self.eq(that) => true
+      case that: ZSet[_, _]              => self.map == that.map
+      case _                             => false
     }
 
   /**
@@ -102,15 +102,14 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
   def flatMap[B1 >: B, C](
     f: A => ZSet[C, B1]
   )(implicit ev1: Commutative[Sum[B1]], ev2: Commutative[Prod[B1]]): ZSet[C, B1] =
-    map.foldLeft[ZSet[C, B1]](ZSet.empty) {
-      case (set, (a, b)) =>
-        set <> f(a).transform(b1 => ev2.combine(Prod(b), Prod(b1)))
+    map.foldLeft[ZSet[C, B1]](ZSet.empty) { case (set, (a, b)) =>
+      set <> f(a).transform(b1 => ev2.combine(Prod(b), Prod(b1)))
     }
 
   /**
    * Returns the hash code of this set.
    */
-  override final def hashCode: Int =
+  override def hashCode: Int =
     map.hashCode
 
   /**
@@ -121,9 +120,8 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
   def intersect[A1 >: A, B1 >: B](
     that: ZSet[A1, B1]
   )(implicit ev1: Commutative[Min[B1]], ev2: Identity[Sum[B1]]): ZSet[A1, B1] =
-    new ZSet((self.map.toVector ++ that.map.toVector).foldLeft(Map.empty[A1, B1]) {
-      case (map, (a, b)) =>
-        map + (a -> ev1.combine(Min(map.getOrElse(a, ev2.identity)), Min(b)))
+    new ZSet((self.map.toVector ++ that.map.toVector).foldLeft(HashMap.empty[A1, B1]) { case (map, (a, b)) =>
+      map + (a -> ev1.combine(Min(map.getOrElse(a, ev2.identity)), Min(b)))
     })
 
   /**
@@ -133,13 +131,12 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
    * times each of the old values appeared in the set.
    */
   def map[B1 >: B, C](f: A => C)(implicit ev: Commutative[Sum[B1]]): ZSet[C, B1] =
-    new ZSet(map.foldLeft[Map[C, B1]](Map.empty) {
-      case (map, (a, b1)) =>
-        val c = f(a)
-        map.get(c) match {
-          case Some(b) => map + (c -> ev.combine(Sum(b), Sum(b1)))
-          case None    => map + (c -> b1)
-        }
+    new ZSet(map.foldLeft[HashMap[C, B1]](HashMap.empty) { case (map, (a, b1)) =>
+      val c = f(a)
+      map.get(c) match {
+        case Some(b) => map + (c -> ev.combine(Sum(b), Sum(b1)))
+        case None    => map + (c -> b1)
+      }
     })
 
   /**
@@ -153,7 +150,7 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
    * Converts this set to a `Map` from elements to how many times they appear
    * in the set.
    */
-  def toMap[A1 >: A]: Map[A1, B] =
+  def toMap[A1 >: A]: Map[A1, B]          =
     map.asInstanceOf[Map[A1, B]]
 
   /**
@@ -161,9 +158,8 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
    * an element appears in the set beyond whether it appears at all.
    */
   def toSet[A1 >: A, B1 >: B](implicit ev1: Equal[B1], ev2: Identity[Sum[B1]]): Set[A1] =
-    map.foldLeft(Set.empty[A1]) {
-      case (set, (a, b)) =>
-        if (ev1.notEqual(b, ev2.identity)) set + a else set
+    map.foldLeft(Set.empty[A1]) { case (set, (a, b)) =>
+      if (ev1.notEqual(b, ev2.identity)) set + a else set
     }
 
   /**
@@ -180,9 +176,8 @@ final class ZSet[+A, +B] private (private val map: Map[A @uncheckedVariance, B])
   def union[A1 >: A, B1 >: B](
     that: ZSet[A1, B1]
   )(implicit ev1: Commutative[Max[B1]], ev2: Identity[Sum[B1]]): ZSet[A1, B1] =
-    new ZSet((self.map.toVector ++ that.map.toVector).foldLeft(Map.empty[A1, B1]) {
-      case (map, (a, b)) =>
-        map + (a -> ev1.combine(Max(map.getOrElse(a, ev2.identity)), Max(b)))
+    new ZSet((self.map.toVector ++ that.map.toVector).foldLeft(HashMap.empty[A1, B1]) { case (map, (a, b)) =>
+      map + (a -> ev1.combine(Max(map.getOrElse(a, ev2.identity)), Max(b)))
     })
 
   /**
@@ -216,7 +211,7 @@ object ZSet {
    * The empty set.
    */
   val empty: ZSet[Nothing, Nothing] =
-    new ZSet(Map.empty)
+    new ZSet(HashMap.empty)
 
   /**
    * Constructs a set from the specified `Iterable`. The measure of how many
@@ -224,44 +219,53 @@ object ZSet {
    * times the value occurred in the specified `Iterable`.
    */
   def fromIterable[A](iterable: Iterable[A]): ZSet[A, Int] =
-    new ZSet(iterable.foldLeft(Map.empty[A, Int])((map, a) => map + (a -> map.get(a).fold(1)(_ + 1))))
+    new ZSet(iterable.foldLeft(HashMap.empty[A, Int])((map, a) => map + (a -> map.get(a).fold(1)(_ + 1))))
 
   /**
    * Constructs a set from the specified `Set`. The measure of how many times
    * a value occurs in the set will be a boolean representing whether a value
    * occurs at all.
    */
-  def fromSet[A](set: Set[A]): ZSet[A, Boolean] =
-    new ZSet(set.foldLeft(Map.empty[A, Boolean])((map, a) => map + (a -> true)))
+  def fromSet[A](set: Set[A]): ZSet[A, Boolean]            =
+    new ZSet(set.foldLeft(HashMap.empty[A, Boolean])((map, a) => map + (a -> true)))
 
   /**
    * Constructs a set from the specified `Map`. The values will be the keys in
    * the `Map` and the measure of how many times a value occurs will be the
+   * keys value.
    */
-  def fromMap[A, B](map: Map[A, B]): ZSet[A, B] =
-    new ZSet(map.foldLeft(Map.empty[A, B])(_ + _))
+  def fromMap[A, B](map: Map[A, B]): ZSet[A, B]            =
+    new ZSet(
+      map match {
+        case map: HashMap[A, B] => map
+        case _                  => map.foldLeft(HashMap.empty[A, B])(_ + _)
+      }
+    )
 
   /**
    * Derives a `Commutative[ZSet[A, B]]` given a `Commutative[B]`.
    */
-  implicit def ZSetCommutative[A, B: Commutative]: Commutative[ZSet[A, B]] =
-    new Commutative[ZSet[A, B]] {
-      def combine(left: => ZSet[A, B], right: => ZSet[A, B]): ZSet[A, B] =
-        new ZSet(right.map.foldLeft(left.map) {
-          case (map, (a, b1)) =>
-            map.get(a) match {
-              case Some(b) => map + (a -> (b <> b1))
-              case None    => map + (a -> b1)
-            }
-        })
+  implicit def ZSetCommutative[A, B](implicit
+    ev: Commutative[B]
+  ): Commutative[ZSet[A, B]] with Identity[ZSet[A, B]] =
+    new Commutative[ZSet[A, B]] with Identity[ZSet[A, B]] {
+      override def combine(l: => ZSet[A, B], r: => ZSet[A, B]): ZSet[A, B] = ZSetIdentity(ev).combine(l, r)
+
+      override def identity: ZSet[A, B] = ZSetIdentity(ev).identity
     }
+
+  /**
+   * Derives a `Debug[ZSet[A, B]]` given a `Debug[A]` and `Debug[B]`.
+   */
+  implicit def ZSetDebug[A: Debug, B: Debug]: Debug[ZSet[A, B]] =
+    chunk => Debug.Repr.VConstructor(List("zio", "prelude"), "ZSet", chunk.toMap.toList.map((t: (A, B)) => t.debug))
 
   /**
    * Derives an `Equal[ZSet[A, B]]` given an `Equal[B]`. Due to the
    * limitations of Scala's `Map`, this uses object equality on the keys.
    */
   implicit def ZSetEqual[A, B: Equal]: Equal[ZSet[A, B]] =
-    Equal[Map[A, B]].contramap(_.map)
+    Equal[HashMap[A, B]].contramap(_.map)
 
   /**
    * The `EqualF` instance for `ZSet`.
@@ -275,8 +279,8 @@ object ZSet {
   /**
    * The `Covariant` instance for `ZSet`.
    */
-  implicit def ZSetCovariant[B](
-    implicit ev: Commutative[Sum[B]]
+  implicit def ZSetCovariant[B](implicit
+    ev: Commutative[Sum[B]]
   ): Covariant[({ type lambda[+x] = ZSet[x, B] })#lambda] =
     new Covariant[({ type lambda[+x] = ZSet[x, B] })#lambda] {
       def map[A, C](f: A => C): ZSet[A, B] => ZSet[C, B] =
@@ -284,16 +288,42 @@ object ZSet {
     }
 
   /**
+   * Derives a `Idempotent[ZSet[A, B]]` given a `Idempotent[B]`.
+   */
+  implicit def ZSetIdempotent[A, B](implicit ev: Idempotent[B]): Idempotent[ZSet[A, B]] with Identity[ZSet[A, B]] =
+    new Idempotent[ZSet[A, B]] with Identity[ZSet[A, B]] {
+      override def combine(l: => ZSet[A, B], r: => ZSet[A, B]): ZSet[A, B] = ZSetIdentity(ev).combine(l, r)
+
+      override def identity: ZSet[A, B] = ZSetIdentity(ev).identity
+    }
+
+  /**
+   * Derives a `Identity[ZSet[A, B]]` given a `Identity[B]`.
+   */
+  implicit def ZSetIdentity[A, B](implicit ev: Associative[B]): Identity[ZSet[A, B]] =
+    new Identity[ZSet[A, B]] {
+      override def combine(left: => ZSet[A, B], right: => ZSet[A, B]): ZSet[A, B] =
+        new ZSet(right.map.foldLeft(left.map) { case (map, (a, b1)) =>
+          map.get(a) match {
+            case Some(b) => map + (a -> (b <> b1))
+            case None    => map + (a -> b1)
+          }
+        })
+
+      override def identity: ZSet[A, B] = ZSet.empty
+    }
+
+  /**
    * The `IdentityFlatten` instance for `ZSet`.
    */
-  implicit def ZSetIdentityFlatten[B](
-    implicit ev1: Commutative[Sum[B]],
+  implicit def ZSetIdentityFlatten[B](implicit
+    ev1: Commutative[Sum[B]],
     ev2: Commutative[Prod[B]]
   ): IdentityFlatten[({ type lambda[+x] = ZSet[x, B] })#lambda] =
     new IdentityFlatten[({ type lambda[+x] = ZSet[x, B] })#lambda] {
       def flatten[A](ffa: ZSet[ZSet[A, B], B]): ZSet[A, B] =
         ffa.flatMap(identity)
-      def any: ZSet[Any, B] = ???
+      def any: ZSet[Any, B]                                = ZSet.fromMap(Map.empty)
 
     }
 
@@ -302,5 +332,5 @@ object ZSet {
    * limitations of Scala's `Map`, this uses object equality on the keys.
    */
   implicit def ZSetHash[A, B: Hash]: Hash[ZSet[A, B]] =
-    Hash[Map[A, B]].contramap(_.map)
+    Hash[HashMap[A, B]].contramap(_.map)
 }

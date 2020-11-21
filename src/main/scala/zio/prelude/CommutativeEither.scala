@@ -1,5 +1,6 @@
 package zio.prelude
 
+import scala.annotation.implicitNotFound
 import scala.concurrent.{ ExecutionContext, Future, Promise }
 
 import zio.ZIO
@@ -8,21 +9,12 @@ import zio.stream.{ ZSink, ZStream }
 import zio.test.TestResult
 import zio.test.laws._
 
-import scala.annotation.implicitNotFound
-
 /**
  * A commutative binary operator that combines two values of types `F[A]` and
  * `F[B]` to produce an `F[Either[A, B]]`.
  */
 @implicitNotFound("No implicit CommutativeEither defined for ${F}.")
 trait CommutativeEither[F[_]] extends AssociativeEither[F] {
-
-  /**
-   * Combines two values of types `F[A]` and `F[B]` to produce an
-   * `F[Either[A, B]]`.
-   */
-  def either[A, B](fa: => F[A], fb: => F[B]): F[Either[A, B]]
-
   // def eitherPar[A, B](fa: => F[A], fb: => F[B]): F[Either[A, B]]
 }
 
@@ -45,7 +37,7 @@ object CommutativeEither extends LawfulF.Invariant[CommutativeEitherDeriveEqualI
    * The set of law laws that instances of `CommutativeEither` must satisfy.
    */
   val laws: LawsF.Invariant[CommutativeEitherDeriveEqualInvariant, Equal] =
-    commutativeLaw
+    commutativeLaw + AssociativeEither.laws
 
   /**
    * The `CommutativeEither` instance for `Future`.
@@ -53,7 +45,7 @@ object CommutativeEither extends LawfulF.Invariant[CommutativeEitherDeriveEqualI
   implicit def FutureCommutativeEither(implicit ec: ExecutionContext): CommutativeEither[Future] =
     new CommutativeEither[Future] {
       def either[A, B](fa: => Future[A], fb: => Future[B]): Future[Either[A, B]] =
-        Promise[Either[A, B]].completeWith(fa.map(Left(_))).completeWith(fb.map(Right(_))).future
+        Promise[Either[A, B]]().completeWith(fa.map(Left(_))).completeWith(fb.map(Right(_))).future
     }
 
   /**

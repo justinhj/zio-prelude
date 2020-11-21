@@ -1,5 +1,7 @@
 package zio.prelude
 
+import scala.collection.immutable.ListMap
+
 import zio.{ Chunk, NonEmptyChunk }
 
 trait Debug[-A] {
@@ -9,45 +11,50 @@ trait Debug[-A] {
 object Debug {
   type Renderer = Repr => String
   object Renderer {
-    val Scala: Renderer = _ match {
-      case Repr.Float(v)       => v.toString
-      case Repr.Long(v)        => v.toString
-      case Repr.String(v)      => v.toString
-      case Repr.KeyValue(k, v) => s"${k.render(Scala)} -> ${v.render(Scala)}"
-      case Repr.Object(_, n)   => n
-      case Repr.Constructor(_, n, reprs) =>
+    val Scala: Renderer = {
+      case Repr.Float(v)                                                               => v.toString
+      case Repr.Long(v)                                                                => v.toString
+      case Repr.Char(v)                                                                => v.toString
+      case Repr.String(v)                                                              => v
+      case Repr.KeyValue(k, v)                                                         => s"${k.render(Scala)} -> ${v.render(Scala)}"
+      case Repr.Object(_, n)                                                           => n
+      case Repr.Constructor(_, n, reprs)                                               =>
         s"$n(${reprs.map(kv => kv._2.render(Scala)).mkString(",")})"
       case Repr.VConstructor(_, n, reprs) if List("List", "Vector", "Map").contains(n) =>
         s"$n(${reprs.map(_.render(Scala)).mkString(", ")})"
-      case Repr.VConstructor(_, n, reprs) if n.startsWith("Tuple") =>
+      case Repr.VConstructor(List("scala"), n, reprs) if n.matches("^Tuple\\d+$")      =>
         s"(${reprs.map(_.render(Scala)).mkString(",")})"
-      case Repr.VConstructor(_, n, reprs) => s"$n(${reprs.map(_.render(Scala)).mkString(",")})"
-      case any                            => Simple(any)
+      case Repr.VConstructor(_, n, reprs)                                              => s"$n(${reprs.map(_.render(Scala)).mkString(",")})"
+      case any                                                                         => Simple(any)
     }
 
-    val Simple: Renderer = _ match {
-      case Repr.Int(v)         => v.toString
-      case Repr.Double(v)      => v.toString
-      case Repr.Float(v)       => s"${v}f"
-      case Repr.Long(v)        => s"${v}L"
-      case Repr.Byte(v)        => v.toString
-      case Repr.Char(v)        => v.toString
-      case Repr.String(v)      => s""""$v""""
-      case Repr.KeyValue(k, v) => s"${k.render(Simple)} -> ${v.render(Simple)}"
-      case Repr.Object(_, n)   => n
-      case Repr.Constructor(_, n, reprs) =>
-        s"$n(${reprs.map(kv => s"${kv._1} -> ${kv._2.render(Simple)}").mkString(", ")})"
-      case Repr.VConstructor(_, n, reprs) => s"$n(${reprs.map(_.render(Simple)).mkString(", ")})"
+    val Simple: Renderer = {
+      case Repr.Int(v)                                                            => v.toString
+      case Repr.Double(v)                                                         => v.toString
+      case Repr.Float(v)                                                          => s"${v}f"
+      case Repr.Long(v)                                                           => s"${v}L"
+      case Repr.Byte(v)                                                           => v.toString
+      case Repr.Char(v)                                                           => s"'$v'"
+      case Repr.Boolean(v)                                                        => v.toString
+      case Repr.Short(v)                                                          => v.toString
+      case Repr.String(v)                                                         => s""""$v""""
+      case Repr.KeyValue(k, v)                                                    => s"${k.render(Simple)} -> ${v.render(Simple)}"
+      case Repr.Object(_, n)                                                      => n
+      case Repr.Constructor(_, n, reprs)                                          =>
+        s"$n(${reprs.map(kv => s"${kv._1} = ${kv._2.render(Simple)}").mkString(", ")})"
+      case Repr.VConstructor(List("scala"), n, reprs) if n.matches("^Tuple\\d+$") =>
+        s"(${reprs.map(_.render(Simple)).mkString(", ")})"
+      case Repr.VConstructor(_, n, reprs)                                         => s"$n(${reprs.map(_.render(Simple)).mkString(", ")})"
     }
 
-    val Full: Renderer = _ match {
-      case Repr.KeyValue(k, v) => s"key: ${k.render(Full)} -> value: ${v.render(Full)}"
-      case Repr.Object(ns, n)  => (ns :+ n).mkString(".")
-      case Repr.Constructor(ns, n, reprs) =>
-        (ns :+ s"$n(${reprs.map(kv => s"${kv._1} -> ${kv._2.render(Full)}").mkString(", ")})").mkString(".")
+    val Full: Renderer = {
+      case Repr.KeyValue(k, v)             => s"key: ${k.render(Full)} -> value: ${v.render(Full)}"
+      case Repr.Object(ns, n)              => (ns :+ n).mkString(".")
+      case Repr.Constructor(ns, n, reprs)  =>
+        (ns :+ s"$n(${reprs.map(kv => s"${kv._1} = ${kv._2.render(Full)}").mkString(", ")})").mkString(".")
       case Repr.VConstructor(ns, n, reprs) =>
         (ns :+ n).mkString(".") + s"(${reprs.map(_.render(Full)).mkString(", ")})"
-      case any => Simple(any)
+      case any                             => Simple(any)
     }
   }
 
@@ -58,25 +65,37 @@ object Debug {
   sealed trait Repr { self =>
     def render(renderer: Renderer): String = renderer(self)
     def render: String                     = render(Renderer.Simple)
+    override def toString: String          = render // to show a nice view in IDEs, REPL, etc
   }
 
   object Repr {
-    import scala.{ Int => SInt, Double => SDouble, Float => SFloat, Long => SLong, Char => SChar, Byte => SByte }
+    import scala.{
+      Int => SInt,
+      Boolean => SBoolean,
+      Short => SShort,
+      Double => SDouble,
+      Float => SFloat,
+      Long => SLong,
+      Char => SChar,
+      Byte => SByte
+    }
     import java.lang.{ String => SString }
 
-    final case class Int(value: SInt)                                                                extends Repr
-    final case class Double(value: SDouble)                                                          extends Repr
-    final case class Float(value: SFloat)                                                            extends Repr
-    final case class Long(value: SLong)                                                              extends Repr
-    final case class Byte(value: SByte)                                                              extends Repr
-    final case class Char(value: SChar)                                                              extends Repr
-    final case class String(value: SString)                                                          extends Repr
-    final case class KeyValue(key: Repr, value: Repr)                                                extends Repr
-    final case class Object(namespace: List[SString], name: SString)                                 extends Repr
-    final case class Constructor(namespace: List[SString], name: SString, reprs: Map[SString, Repr]) extends Repr
+    final case class Int(value: SInt)                                                                    extends Repr
+    final case class Double(value: SDouble)                                                              extends Repr
+    final case class Float(value: SFloat)                                                                extends Repr
+    final case class Long(value: SLong)                                                                  extends Repr
+    final case class Byte(value: SByte)                                                                  extends Repr
+    final case class Char(value: SChar)                                                                  extends Repr
+    final case class Boolean(value: SBoolean)                                                            extends Repr
+    final case class Short(value: SShort)                                                                extends Repr
+    final case class String(value: SString)                                                              extends Repr
+    final case class KeyValue(key: Repr, value: Repr)                                                    extends Repr
+    final case class Object(namespace: List[SString], name: SString)                                     extends Repr
+    final case class Constructor(namespace: List[SString], name: SString, reprs: ListMap[SString, Repr]) extends Repr
     object Constructor {
       def apply(namespace: List[SString], name: SString, repr: (SString, Repr), reprs: (SString, Repr)*): Repr =
-        new Constructor(namespace, name, (repr :: reprs.toList).toMap)
+        new Constructor(namespace, name, ListMap(repr :: reprs.toList: _*))
     }
     final case class VConstructor(namespace: List[SString], name: SString, reprs: List[Repr]) extends Repr
   }
@@ -89,6 +108,8 @@ object Debug {
   implicit val LongDebug: Debug[Long]       = Repr.Long(_)
   implicit val ByteDebug: Debug[Byte]       = Repr.Byte(_)
   implicit val CharDebug: Debug[Char]       = Repr.Char(_)
+  implicit val BooleanDebug: Debug[Boolean] = Repr.Boolean(_)
+  implicit val ShortDebug: Debug[Short]     = Repr.Short(_)
   implicit val StringDebug: Debug[String]   = Repr.String(_)
 
   def keyValueDebug[A: Debug, B: Debug]: Debug[(A, B)] = n => Repr.KeyValue(n._1.debug, n._2.debug)
@@ -102,22 +123,18 @@ object Debug {
   implicit def DeriveDebug[F[_], A](implicit derive: Derive[F, Debug], debug: Debug[A]): Debug[F[A]] =
     derive.derive(debug)
 
-  implicit def EitherDebug[E: Debug, A: Debug]: Debug[Either[E, A]] =
-    either =>
-      either match {
-        case Left(e)  => Repr.VConstructor(List("scala"), "Left", List(e.debug))
-        case Right(a) => Repr.VConstructor(List("scala"), "Right", List(a.debug))
-      }
+  implicit def EitherDebug[E: Debug, A: Debug]: Debug[Either[E, A]] = {
+    case Left(e)  => Repr.VConstructor(List("scala"), "Left", List(e.debug))
+    case Right(a) => Repr.VConstructor(List("scala"), "Right", List(a.debug))
+  }
 
   implicit def NonEmptyChunkDebug[A: Debug]: Debug[NonEmptyChunk[A]] =
     nonEmptyChunk => Repr.VConstructor(List("zio"), "NonEmptyChunk", nonEmptyChunk.map(_.debug).toList)
 
-  implicit def OptionDebug[A: Debug]: Debug[Option[A]] =
-    option =>
-      option match {
-        case None    => Repr.Object(List("scala"), "None")
-        case Some(a) => Repr.VConstructor(List("scala"), "Some", List(a.debug))
-      }
+  implicit def OptionDebug[A: Debug]: Debug[Option[A]] = {
+    case None    => Repr.Object(List("scala"), "None")
+    case Some(a) => Repr.VConstructor(List("scala"), "Some", List(a.debug))
+  }
 
   implicit def ListDebug[A: Debug]: Debug[List[A]] =
     list => Repr.VConstructor(List("scala"), "List", list.map(_.debug))

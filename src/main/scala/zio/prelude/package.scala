@@ -1,11 +1,14 @@
 package zio
 
-import zio.test.{ assert, TestResult }
+import zio.test.{ TestResult, assert }
+
+import com.github.ghik.silencer.silent
 
 package object prelude
     extends Assertions
     with AssociativeSyntax
     with AssociativeBothSyntax
+    with AssociativeComposeSyntax
     with AssociativeEitherSyntax
     with AssociativeFlattenSyntax
     with CommutativeBothSyntax
@@ -13,17 +16,21 @@ package object prelude
     with CovariantSyntax
     with ContravariantSyntax
     with DebugSyntax
+    with DivariantSyntax
     with EqualSyntax
     with HashSyntax
     with IdExports
     with IdentitySyntax
     with IdentityBothSyntax
     with IdentityEitherSyntax
+    with InverseSyntax
     with NewtypeExports
     with NewtypeFExports
+    with NonEmptySetSyntax
     with NonEmptyTraversableSyntax
     with OrdSyntax
-    with TraversableSyntax {
+    with TraversableSyntax
+    with BicovariantSyntax {
 
   type <=>[A, B] = Equivalence[A, B]
 
@@ -43,6 +50,8 @@ package object prelude
 
   type MultiSet[+A] = ZSet[A, Int]
   val MultiSet: ZSet.type = ZSet
+  type NonEmptyMultiSet[+A] = ZNonEmptySet[A, Int]
+  val NonEmptyMultiSet: ZNonEmptySet.type = ZNonEmptySet
 
   type DeriveAssociative[F[_]] = Derive[F, Associative]
   type DeriveCommutative[F[_]] = Derive[F, Commutative]
@@ -55,18 +64,21 @@ package object prelude
 
   object classic {
     type Semigroup[A]            = Associative[A]
-    type CommutativeSemigroup[A] = Associative[A] with Commutative[A]
+    type CommutativeSemigroup[A] = Commutative[A]
     type Monoid[A]               = Identity[A]
     type CommutativeMonoid[A]    = Commutative[A] with Identity[A]
-    type Group[A]                = Identity[A] with Inverse[A]
-    type AbelianGroup[A]         = Commutative[A] with Identity[A] with Inverse[A]
+    type Group[A]                = Inverse[A]
+    type AbelianGroup[A]         = Commutative[A] with Inverse[A]
+
+    type Semilattice[A]        = Commutative[A] with Idempotent[A]
+    type BoundedSemilattice[A] = Semilattice[A] with Identity[A]
 
     type Functor[F[+_]]       = Covariant[F]
     type Contravariant[F[-_]] = zio.prelude.Contravariant[F]
     type Invariant[F[_]]      = zio.prelude.Invariant[F]
-    type Alternative[F[+_]] =
+    type Alternative[F[+_]]   =
       Covariant[F] with IdentityBoth[F] with IdentityEither[F]
-    type InvariantAlt[F[_]] =
+    type InvariantAlt[F[_]]   =
       Invariant[F] with IdentityBoth[F] with IdentityEither[F]
 
     type InvariantSemigroupal[F[_]]      = Invariant[F] with AssociativeBoth[F]
@@ -74,7 +86,7 @@ package object prelude
     type ContravariantSemigroupal[F[-_]] = Contravariant[F] with AssociativeBoth[F]
 
     type SemigroupK[F[_]] = AssociativeEither[F]
-    type MonoidK[F[_]]    = AssociativeEither[F] with IdentityEither[F]
+    type MonoidK[F[_]]    = IdentityEither[F]
 
     type ContravariantMonoidal[F[-_]] = Contravariant[F] with IdentityBoth[F]
     type InvariantMonoidal[F[_]]      = Invariant[F] with IdentityBoth[F]
@@ -93,23 +105,41 @@ package object prelude
 
     type Category[:=>[-_, +_]]   = IdentityCompose[:=>]
     type Profunctor[:=>[-_, +_]] = Divariant[:=>]
+    type Bifunctor[:=>[+_, +_]]  = Bicovariant[:=>]
   }
 
   /**
    * Provides implicit syntax for assertions.
    */
   implicit class AssertionSyntax[A](private val self: A) extends AnyVal {
-    def <->[A1 >: A](that: A1)(implicit eq: Equal[A1]): TestResult =
-      equal(that)
-    def equal[A1 >: A](that: A1)(implicit eq: Equal[A1]): TestResult =
+    def <->[A1 >: A](that: A1)(implicit eq: Equal[A1]): TestResult       =
+      isEqualTo(that)
+    // name intentionally different from other methods (`equal`, `equalTo`, etc to avoid confusing compiler errors)
+    def isEqualTo[A1 >: A](that: A1)(implicit eq: Equal[A1]): TestResult =
       assert(self)(equalTo(that))
-    def greater(that: A)(implicit ord: Ord[A]): TestResult =
+    def greater(that: A)(implicit ord: Ord[A]): TestResult               =
       assert(self)(isGreaterThan(that))
-    def greaterOrEqual(that: A)(implicit ord: Ord[A]): TestResult =
+    def greaterOrEqual(that: A)(implicit ord: Ord[A]): TestResult        =
       assert(self)(isGreaterThanEqualTo(that))
-    def less(that: A)(implicit ord: Ord[A]): TestResult =
+    def less(that: A)(implicit ord: Ord[A]): TestResult                  =
       assert(self)(isLessThan(that))
-    def lessOrEqual(that: A)(implicit ord: Ord[A]): TestResult =
+    def lessOrEqual(that: A)(implicit ord: Ord[A]): TestResult           =
       assert(self)(isLessThanEqualTo(that))
+  }
+
+  implicit class AnySyntax[A](private val a: A) extends AnyVal {
+
+    @silent("side-effecting nullary methods are discouraged")
+    /* Ignores the value, if you explicitly want to do so and avoids "Unused value" compiler warnings. */
+    def ignore: Unit = ()
+
+    /** Applies function `f` to a value `a`, like `f(a)`, but in flipped order and doesn't need parentheses. Can be chained, like `x |> f |> g`. */
+    def |>[B](f: A => B): B = f(a)
+
+    /** Applies the function `f` to the value `a`, ignores the result, and returns the original value `a`. Practical for debugging, like `x.someMethod.tee(println(_)).someOtherMethod...` . Similar to the `tee` UNIX command. */
+    def tap(f: A => Any): A = {
+      val _ = f(a)
+      a
+    }
   }
 }

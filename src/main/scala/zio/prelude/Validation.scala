@@ -2,9 +2,9 @@ package zio.prelude
 
 import scala.util.Try
 
-import zio.{ IO, NonEmptyChunk, ZIO }
 import zio.prelude.Validation._
 import zio.test.Assertion
+import zio.{ IO, ZIO }
 
 /**
  * `Validation` represents either a successful value of type `A` or a
@@ -34,15 +34,12 @@ sealed trait Validation[+E, +A] { self =>
   final def <&>[E1 >: E, B](that: Validation[E1, B]): Validation[E1, (A, B)] =
     zipPar(that)
 
-  /**
-   * Returns whether this `Validation` and the specified `Validation` are equal
-   * to each other.
-   */
-  override final def equals(that: Any): Boolean =
+  def combine[E1 >: E, A1 >: A](that: Validation[E1, A1])(implicit A1: Associative[A1]): Validation[E1, A1] =
     (self, that) match {
-      case (Failure(es), Failure(e1s)) => es.toList.toSet == e1s.toList.toSet
-      case (Success(a), Success(a1))   => a == a1
-      case _                           => false
+      case (Failure(es1), Failure(es2)) => Failure(es1 <> es2)
+      case (l @ Failure(_), _)          => l
+      case (_, r @ Failure(_))          => r
+      case (Success(a1), Success(a2))   => Success(A1.combine(a1, a2))
     }
 
   /**
@@ -59,16 +56,16 @@ sealed trait Validation[+E, +A] { self =>
    * Transforms the value of this `Validation` with the specified effectual
    * function if it is a success or returns the value unchanged otherwise.
    */
-  final def foreach[F[+_]: IdentityBoth: Covariant, B](f: A => F[B]): F[Validation[E, B]] =
+  final def foreach[F[+_], B](f: A => F[B])(implicit ib: IdentityBoth[F], c: Covariant[F]): F[Validation[E, B]] =
     self match {
-      case Failure(es) => Failure(es).succeed
+      case Failure(es) => Failure(es).succeed(ib, c)
       case Success(a)  => f(a).map(Success(_))
     }
 
   /**
    * Folds over the error and success values of this `Validation`.
    */
-  final def fold[B](failure: NonEmptyChunk[E] => B, success: A => B): B =
+  final def fold[B](failure: NonEmptyMultiSet[E] => B, success: A => B): B =
     self match {
       case Failure(es) => failure(es)
       case Success(a)  => success(a)
@@ -97,7 +94,7 @@ sealed trait Validation[+E, +A] { self =>
   /**
    * Transforms this `Validation` to an `Either`.
    */
-  final def toEither[E1 >: E]: Either[NonEmptyChunk[E1], A] =
+  final def toEither[E1 >: E]: Either[NonEmptyMultiSet[E1], A] =
     fold(Left(_), Right(_))
 
   /**
@@ -111,12 +108,12 @@ sealed trait Validation[+E, +A] { self =>
    * Transforms this `Validation` to a `Try`, discarding all but the first error.
    */
   final def toTry(implicit ev: E <:< Throwable): scala.util.Try[A] =
-    fold(e => scala.util.Failure(ev(e.head)), scala.util.Success(_))
+    fold(e => scala.util.Failure(ev(e.toSet.head)), scala.util.Success(_))
 
   /**
    * Converts this `Validation` into a `ZIO` effect.
    */
-  final def toZIO: IO[NonEmptyChunk[E], A] = ZIO.fromEither(self.toEither)
+  final def toZIO: IO[NonEmptyMultiSet[E], A] = ZIO.fromEither(self.toEither)
 
   /**
    * A variant of `zipPar` that keeps only the left success value, but returns
@@ -150,17 +147,38 @@ sealed trait Validation[+E, +A] { self =>
    */
   final def zipWithPar[E1 >: E, B, C](that: Validation[E1, B])(f: (A, B) => C): Validation[E1, C] =
     (self, that) match {
-      case (Failure(es), Failure(e1s)) => Failure(es ++ e1s)
+      case (Failure(es), Failure(e1s)) => Failure(es | e1s)
       case (failure @ Failure(_), _)   => failure
       case (_, failure @ Failure(_))   => failure
       case (Success(a), Success(b))    => Success(f(a, b))
     }
 }
 
-object Validation extends LowPriorityValidationImplicits {
+object Validation {
 
-  final case class Failure[+E](errors: NonEmptyChunk[E]) extends Validation[E, Nothing]
-  final case class Success[+A](value: A)                 extends Validation[Nothing, A]
+  final case class Failure[+E](errors: NonEmptyMultiSet[E]) extends Validation[E, Nothing]
+  final case class Success[+A](value: A)                    extends Validation[Nothing, A]
+
+  /** The `Associative` instance for `Validation`. */
+  implicit def ValidationAssociative[E, A: Associative]: Associative[Validation[E, A]] =
+    new Associative[Validation[E, A]] {
+      override def combine(l: => Validation[E, A], r: => Validation[E, A]): Validation[E, A] = l.combine(r)
+    }
+
+  /**
+   * The `Bicovariant` instance for `Validation`.
+   */
+  implicit def ValidationBicovariant[E]: Bicovariant[Validation] =
+    new Bicovariant[Validation] {
+      override def bimap[A, B, AA, BB](f: A => AA, g: B => BB): Validation[A, B] => Validation[AA, BB] =
+        _.map(g).mapError(f)
+    }
+
+  /** The `Commutative` instance for `Validation`. */
+  implicit def ValidationCommutative[E, A: Commutative]: Commutative[Validation[E, A]] =
+    new Commutative[Validation[E, A]] {
+      override def combine(l: => Validation[E, A], r: => Validation[E, A]): Validation[E, A] = l.combine(r)
+    }
 
   /**
    * The `Covariant` instance for `Validation`.
@@ -174,12 +192,10 @@ object Validation extends LowPriorityValidationImplicits {
   /**
    * Derives a `Debug[Validation[E, A]]` given a `Debug[E]` and a `Debug[A]`.
    */
-  implicit def ValidationDebug[E: Debug, A: Debug]: Debug[Validation[E, A]] =
-    validation =>
-      validation match {
-        case Failure(es) => Debug.Repr.VConstructor(List("zio", "prelude"), "Validation.Failure", List(es.debug))
-        case Success(a)  => Debug.Repr.VConstructor(List("zio", "prelude"), "Validation.Success", List(a.debug))
-      }
+  implicit def ValidationDebug[E: Debug, A: Debug]: Debug[Validation[E, A]] = {
+    case Failure(es) => Debug.Repr.VConstructor(List("zio", "prelude"), "Validation.Failure", List(es.debug))
+    case Success(a)  => Debug.Repr.VConstructor(List("zio", "prelude"), "Validation.Success", List(a.debug))
+  }
 
   /**
    * Derives an `Equal[Validation[E, A]]` given an `Equal[E]` and an
@@ -187,7 +203,7 @@ object Validation extends LowPriorityValidationImplicits {
    */
   implicit def ValidationEqual[E, A: Equal]: Equal[Validation[E, A]] =
     Equal.make {
-      case (Failure(es), Failure(e1s)) => es.toList.toSet === e1s.toList.toSet
+      case (Failure(es), Failure(e1s)) => es === e1s
       case (Success(a), Success(a1))   => a === a1
       case _                           => false
     }
@@ -222,21 +238,36 @@ object Validation extends LowPriorityValidationImplicits {
     }
 
   /**
-   * The `IdentityBoth` instance for `Validation`.
+   * Derives a `Hash[Validation[E, A]]` given a `Hash[E]` and a `Hash[A]`.
    */
-  implicit def ValidationIdentityBoth[E]: IdentityBoth[({ type lambda[x] = Validation[E, x] })#lambda] =
-    new IdentityBoth[({ type lambda[x] = Validation[E, x] })#lambda] {
-      val any: Validation[Nothing, Any] =
+  implicit def ValidationHash[E: Hash, A: Hash]: Hash[Validation[E, A]] =
+    Hash[NonEmptyMultiSet[E]].eitherWith(Hash[A])(_.toEither)
+
+  /** The `Idempotent` instance for `Validation`. */
+  implicit def ValidationIdempotent[E, A: Idempotent]: Idempotent[Validation[E, A]] =
+    new Idempotent[Validation[E, A]] {
+      override def combine(l: => Validation[E, A], r: => Validation[E, A]): Validation[E, A] = l.combine(r)
+    }
+
+  /** The `Identity` instance for `Validation`. */
+  implicit def ValidationIdentity[E, A: Identity]: Identity[Validation[E, A]] = new Identity[Validation[E, A]] {
+    override def identity: Validation[E, A] = Success(Identity[A].identity)
+
+    override def combine(l: => Validation[E, A], r: => Validation[E, A]): Validation[E, A] = l.combine(r)
+  }
+
+  /**
+   * The `CommutativeBoth` and `IdentityBoth` (and thus `AssociativeBoth`) instance for Validation.
+   */
+  implicit def ValidationCommutativeIdentityBoth[E]: CommutativeBoth[({ type lambda[x] = Validation[E, x] })#lambda]
+    with IdentityBoth[({ type lambda[x] = Validation[E, x] })#lambda] =
+    new CommutativeBoth[({ type lambda[x] = Validation[E, x] })#lambda]
+      with IdentityBoth[({ type lambda[x] = Validation[E, x] })#lambda] {
+      val any: Validation[Nothing, Any]                                                       =
         Validation.unit
       def both[A, B](fa: => Validation[E, A], fb: => Validation[E, B]): Validation[E, (A, B)] =
         fa.zipPar(fb)
     }
-
-  /**
-   * Derives an `Ord[Validation[E, A]]` given na `Ord[E]` and an `Ord[A]`.
-   */
-  implicit def ValidationOrd[E: Ord, A: Ord]: Ord[Validation[E, A]] =
-    Ord[NonEmptyChunk[E]].eitherWith(Ord[A])(_.toEither)
 
   /**
    * The `Traversable` instance for `Validation`.
@@ -252,9 +283,8 @@ object Validation extends LowPriorityValidationImplicits {
    * during evaluation and capturing it as a failure.
    */
   def apply[A](a: => A): Validation[Throwable, A] =
-    try {
-      succeed(a)
-    } catch {
+    try succeed(a)
+    catch {
       case e: VirtualMachineError => throw e
       case e: Throwable           => fail(e)
     }
@@ -271,7 +301,7 @@ object Validation extends LowPriorityValidationImplicits {
    * Constructs a `Validation` that fails with the specified error.
    */
   def fail[E](error: E): Validation[E, Nothing] =
-    Failure(NonEmptyChunk(error))
+    Failure(NonEmptyMultiSet(error))
 
   /**
    * Constructs a `Validation` from a value and an assertion about that value.
@@ -296,10 +326,26 @@ object Validation extends LowPriorityValidationImplicits {
     value.fold[Validation[Unit, A]](fail(()))(succeed)
 
   /**
+   * Constructs a `Validation` from a predicate, failing with None.
+   */
+  def fromPredicate[A](value: A)(f: A => Boolean): Validation[None.type, A] =
+    fromPredicateWith(None, value)(f)
+
+  /**
+   * Constructs a `Validation` from a predicate, failing with the error provided.
+   */
+  def fromPredicateWith[E, A](error: E, value: A)(f: A => Boolean): Validation[E, A] =
+    if (f(value)) Validation.succeed(value)
+    else Validation.fail(error)
+
+  /**
    * Constructs a `Validation` from a `Try`.
    */
   def fromTry[A](value: => Try[A]): Validation[Throwable, A] =
-    value.fold(fail, succeed)
+    value match {
+      case util.Failure(exception) => fail(exception)
+      case util.Success(value)     => succeed(value)
+    }
 
   /**
    * Combines the results of the specified `Validation` values using the
@@ -377,8 +423,8 @@ object Validation extends LowPriorityValidationImplicits {
   )(
     f: (A0, A1, A2, A3, A4, A5, A6) => B
   ): Validation[E, B] =
-    (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6).map {
-      case ((((((a0, a1), a2), a3), a4), a5), a6) => f(a0, a1, a2, a3, a4, a5, a6)
+    (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6).map { case ((((((a0, a1), a2), a3), a4), a5), a6) =>
+      f(a0, a1, a2, a3, a4, a5, a6)
     }
 
   /**
@@ -397,8 +443,8 @@ object Validation extends LowPriorityValidationImplicits {
   )(
     f: (A0, A1, A2, A3, A4, A5, A6, A7) => B
   ): Validation[E, B] =
-    (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7).map {
-      case (((((((a0, a1), a2), a3), a4), a5), a6), a7) => f(a0, a1, a2, a3, a4, a5, a6, a7)
+    (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7).map { case (((((((a0, a1), a2), a3), a4), a5), a6), a7) =>
+      f(a0, a1, a2, a3, a4, a5, a6, a7)
     }
 
   /**
@@ -661,8 +707,8 @@ object Validation extends LowPriorityValidationImplicits {
   ): Validation[E, B] =
     (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7 <&> a8 <&> a9 <&> a10 <&> a11 <&> a12 <&> a13 <&> a14 <&> a15 <&> a16 <&> a17).map {
       case (
-          ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
-          a17
+            ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
+            a17
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17)
     }
@@ -696,11 +742,11 @@ object Validation extends LowPriorityValidationImplicits {
   ): Validation[E, B] =
     (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7 <&> a8 <&> a9 <&> a10 <&> a11 <&> a12 <&> a13 <&> a14 <&> a15 <&> a16 <&> a17 <&> a18).map {
       case (
-          (
-            ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
-            a17
-          ),
-          a18
+            (
+              ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
+              a17
+            ),
+            a18
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18)
     }
@@ -735,14 +781,17 @@ object Validation extends LowPriorityValidationImplicits {
   ): Validation[E, B] =
     (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7 <&> a8 <&> a9 <&> a10 <&> a11 <&> a12 <&> a13 <&> a14 <&> a15 <&> a16 <&> a17 <&> a18 <&> a19).map {
       case (
-          (
             (
-              ((((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15), a16),
-              a17
+              (
+                (
+                  (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
+                  a16
+                ),
+                a17
+              ),
+              a18
             ),
-            a18
-          ),
-          a19
+            a19
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19)
     }
@@ -778,20 +827,20 @@ object Validation extends LowPriorityValidationImplicits {
   ): Validation[E, B] =
     (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7 <&> a8 <&> a9 <&> a10 <&> a11 <&> a12 <&> a13 <&> a14 <&> a15 <&> a16 <&> a17 <&> a18 <&> a19 <&> a20).map {
       case (
-          (
             (
               (
                 (
-                  (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
-                  a16
+                  (
+                    (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
+                    a16
+                  ),
+                  a17
                 ),
-                a17
+                a18
               ),
-              a18
+              a19
             ),
-            a19
-          ),
-          a20
+            a20
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20)
     }
@@ -828,23 +877,26 @@ object Validation extends LowPriorityValidationImplicits {
   ): Validation[E, B] =
     (a0 <&> a1 <&> a2 <&> a3 <&> a4 <&> a5 <&> a6 <&> a7 <&> a8 <&> a9 <&> a10 <&> a11 <&> a12 <&> a13 <&> a14 <&> a15 <&> a16 <&> a17 <&> a18 <&> a19 <&> a20 <&> a21).map {
       case (
-          (
             (
               (
                 (
                   (
-                    (((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14), a15),
-                    a16
+                    (
+                      (
+                        ((((((((((((((a0, a1), a2), a3), a4), a5), a6), a7), a8), a9), a10), a11), a12), a13), a14),
+                        a15
+                      ),
+                      a16
+                    ),
+                    a17
                   ),
-                  a17
+                  a18
                 ),
-                a18
+                a19
               ),
-              a19
+              a20
             ),
-            a20
-          ),
-          a21
+            a21
           ) =>
         f(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21)
     }
@@ -1296,22 +1348,4 @@ object Validation extends LowPriorityValidationImplicits {
    */
   val unit: Validation[Nothing, Unit] =
     succeed(())
-}
-
-trait LowPriorityValidationImplicits {
-
-  /**
-   * The `CommutativeBoth` instance for `Validation`.
-   */
-  implicit def ValidationCommutativeBoth[E]: CommutativeBoth[({ type lambda[x] = Validation[E, x] })#lambda] =
-    new CommutativeBoth[({ type lambda[x] = Validation[E, x] })#lambda] {
-      def both[A, B](fa: => Validation[E, A], fb: => Validation[E, B]): Validation[E, (A, B)] =
-        fa.zipPar(fb)
-    }
-
-  /**
-   * Derives a `Hash[Validation[E, A]]` given a `Hash[E]` and a `Hash[A]`.
-   */
-  implicit def ValidationHash[E: Hash, A: Hash]: Hash[Validation[E, A]] =
-    Hash[NonEmptyChunk[E]].eitherWith(Hash[A])(_.toEither)
 }

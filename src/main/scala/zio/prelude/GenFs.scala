@@ -1,10 +1,14 @@
 package zio.prelude
 
+import scala.concurrent.Future
+import scala.util.Try
+
 import zio.prelude.newtypes.Failure
-import zio.{ Cause, Exit, NonEmptyChunk }
 import zio.random.Random
+import zio.test.Gen.oneOf
 import zio.test._
 import zio.test.laws.GenF
+import zio.{ Cause, Exit, NonEmptyChunk }
 
 /**
  * Provides higher kinded generators.
@@ -38,6 +42,15 @@ object GenFs {
         }
     }
 
+  /**
+   * A generator of `Future` values.
+   */
+  val future: GenF[Random with Sized, Future] =
+    new GenF[Random with Sized, Future] {
+      def apply[R1 <: Random with Sized, A](gen: Gen[R1, A]): Gen[R1, Future[A]] =
+        oneOf(Gen.throwable.map(Future.failed), gen.map(Future.successful))
+    }
+
   def map[R <: Random with Sized, K](k: Gen[R, K]): GenF[R, ({ type lambda[+v] = Map[K, v] })#lambda] =
     new GenF[R, ({ type lambda[+v] = Map[K, v] })#lambda] {
       def apply[R1 <: R, V](v: Gen[R1, V]): Gen[R1, Map[K, V]] =
@@ -59,13 +72,22 @@ object GenFs {
         Gens.nonEmptyListOf(gen)
     }
 
+  /**
+   * A generator of `Try` values.
+   */
+  val tryScala: GenF[Random with Sized, Try] =
+    new GenF[Random with Sized, Try] {
+      def apply[R1 <: Random with Sized, A](gen: Gen[R1, A]): Gen[R1, Try[A]] =
+        oneOf(Gen.throwable.map(scala.util.Failure(_)), gen.map(scala.util.Success(_)))
+    }
+
   def tuple2[R <: Random with Sized, A](a: Gen[R, A]): GenF[R, ({ type lambda[+x] = (A, x) })#lambda] =
     new GenF[R, ({ type lambda[+x] = (A, x) })#lambda] {
       def apply[R1 <: R, B](b: Gen[R1, B]): Gen[R1, (A, B)] =
         a.zip(b)
     }
 
-  def tuple3[R <: Random with Sized, A, B, C](
+  def tuple3[R <: Random with Sized, A, B](
     a: Gen[R, A],
     b: Gen[R, B]
   ): GenF[R, ({ type lambda[+c] = (A, B, c) })#lambda] =

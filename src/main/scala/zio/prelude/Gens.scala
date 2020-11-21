@@ -18,14 +18,14 @@ object Gens {
    * A generator of state transition functions.
    */
   def state[R, S, A](s: Gen[R, S], a: Gen[R, A]): Gen[R, State[S, A]] =
-    Gen.function[R, S, (S, A)](s <*> a).map(State.modify(_))
+    Gen.function[R, S, (S, A)](s <*> a).map(State.modify)
 
   /**
    * A generator of `Validation` values.
    */
   def validation[R <: Random with Sized, E, A](e: Gen[R, E], a: Gen[R, A]): Gen[R, Validation[E, A]] =
-    Gen.either(Gen.chunkOf1(e), a).map {
-      case Left(es) => Validation.Failure(es)
+    Gen.either(Gen.setOf1(e), a).map {
+      case Left(es) => Validation.Failure(NonEmptyMultiSet.fromIterableOption(es).get)
       case Right(a) => Validation.Success(a)
     }
 }

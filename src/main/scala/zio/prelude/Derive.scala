@@ -1,5 +1,7 @@
 package zio.prelude
 
+import scala.util.Try
+
 import zio.{ Cause, Chunk, Exit, NonEmptyChunk }
 
 /**
@@ -88,7 +90,16 @@ object Derive {
   implicit def SetDeriveEqual[A]: DeriveEqual[({ type lambda[x] = Set[A] })#lambda] =
     new DeriveEqual[({ type lambda[x] = Set[A] })#lambda] {
       def derive[B: Equal]: Equal[Set[A]] =
-        Equal.SetEqual
+        Equal.SetHash
+    }
+
+  /**
+   * The `DeriveEqual` instance for `Try`.
+   */
+  implicit val TryDeriveEqual: DeriveEqual[Try] =
+    new DeriveEqual[Try] {
+      def derive[A: Equal]: Equal[Try[A]] =
+        Equal.TryEqual
     }
 
   /**
@@ -509,7 +520,7 @@ object Derive {
   implicit val CauseDeriveEqual: DeriveEqual[Cause] =
     new DeriveEqual[Cause] {
       def derive[A: Equal]: Equal[Cause[A]] =
-        Equal.CauseEqual
+        Equal.CauseHash
     }
 
   /**
